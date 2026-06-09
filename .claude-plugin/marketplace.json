@@ -1,0 +1,14 @@
+{
+  "name": "claude-skills",
+  "owner": {
+    "name": "Daniel Lopez Puig",
+    "url": "https://github.com/daniel-lopez-puig"
+  },
+  "plugins": [
+    {
+      "name": "mobile-web-correctness",
+      "source": "./plugins/mobile-web-correctness",
+      "description": "Checklist of mobile web frontend gotchas (iOS input zoom, on-screen keyboard / visualViewport, fixed-overlay page-bleed, iOS scroll-lock, dvh, safe-area) to apply before shipping mobile UI."
+    }
+  ]
+}
