@@ -1,0 +1,11 @@
+{
+  "name": "mobile-web-correctness",
+  "version": "0.1.0",
+  "description": "A Claude Code skill: a maintained checklist of mobile web frontend gotchas (iOS input zoom, on-screen keyboard / visualViewport, fixed-overlay page-bleed needing portal-to-body, iOS scroll-lock, dvh, safe-area, touch targets) to apply BEFORE shipping any web UI, and when fixing iOS/Safari/Android bugs.",
+  "author": {
+    "name": "Daniel Lopez Puig",
+    "url": "https://github.com/daniel-lopez-puig"
+  },
+  "keywords": ["mobile", "web", "frontend", "css", "ios", "safari", "keyboard", "viewport", "responsive", "skill"],
+  "license": "MIT"
+}
