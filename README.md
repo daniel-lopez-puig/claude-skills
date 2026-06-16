@@ -15,6 +15,15 @@ A maintained checklist of mobile **web** frontend gotchas that desktop and headl
 
 The skill auto-surfaces when you build/edit web UI, overlays, or forms, or fix iOS/Safari/Android keyboard/viewport bugs.
 
+### `browser-modes`
+Stops the single most common Playwright-with-an-agent failure: the agent runs a **headless** browser and then narrates it as if you're looking over its shoulder ("as you can see on the page…") — but there's no window, so you can't. The skill makes the agent pick a mode on purpose:
+
+- **Headless** (default) — invisible, fast, throwaway. The agent must share **screenshots** instead of implying you can see it.
+- **Visible window** — opened **up front** when the task needs a login/auth (not after faceplanting into a login wall), on a persistent profile so sessions survive.
+- **Handover** — attaches to your **real, already-open Chrome** over the DevTools port, only when you explicitly ask ("take over my browser", "the tab I have open"), with guest etiquette (work in a new tab, confirm destructive actions, leave your other tabs alone).
+
+It auto-surfaces before any browser-automation / web-testing / screenshot task. The handover mode needs a small one-time local setup (a dedicated debug Chrome profile + helper script) documented inside the skill.
+
 ## Install
 
 In Claude Code:
@@ -22,9 +31,10 @@ In Claude Code:
 ```
 /plugin marketplace add daniel-lopez-puig/claude-skills
 /plugin install mobile-web-correctness@claude-skills
+/plugin install browser-modes@claude-skills
 ```
 
-That's it — the skill is now available and Claude will pull it in when relevant.
+That's it — the skills are now available and Claude will pull them in when relevant.
 
 ## Contributing
 

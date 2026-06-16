@@ -9,6 +9,11 @@
       "name": "mobile-web-correctness",
       "source": "./plugins/mobile-web-correctness",
       "description": "Checklist of mobile web frontend gotchas (iOS input zoom, on-screen keyboard / visualViewport, fixed-overlay page-bleed, iOS scroll-lock, dvh, safe-area) to apply before shipping mobile UI."
+    },
+    {
+      "name": "browser-modes",
+      "source": "./plugins/browser-modes",
+      "description": "Pick the right browser-automation mode before any Playwright/web task — headless (default, invisible), a visible window when login/auth is needed, or handover to the user's real already-open Chrome only when asked. Stops agents narrating a headless browser as if the user can see it."
     }
   ]
 }
