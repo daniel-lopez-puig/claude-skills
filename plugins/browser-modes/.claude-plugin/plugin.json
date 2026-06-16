@@ -1,0 +1,11 @@
+{
+  "name": "browser-modes",
+  "version": "0.1.0",
+  "description": "A Claude Code skill: pick the right browser-automation mode before any Playwright/web task — headless (default, invisible to the user), a visible window when login/auth is needed (opened up front, not after faceplanting into a login wall), or handover that attaches to the user's real, already-open Chrome only when they explicitly ask. Stops agents from narrating a headless browser as if the user can see it.",
+  "author": {
+    "name": "Daniel Lopez Puig",
+    "url": "https://github.com/daniel-lopez-puig"
+  },
+  "keywords": ["browser", "playwright", "headless", "chrome", "cdp", "automation", "handover", "auth", "screenshot", "skill"],
+  "license": "MIT"
+}
