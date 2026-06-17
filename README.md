@@ -24,6 +24,15 @@ Stops the single most common Playwright-with-an-agent failure: the agent runs a 
 
 It auto-surfaces before any browser-automation / web-testing / screenshot task. The handover mode needs a small one-time local setup (a dedicated debug Chrome profile + helper script) documented inside the skill.
 
+### `app-review-scraper`
+Download **every public review** for one or more mobile apps from the **iOS App Store** and **Google Play**, store it locally as normalized JSON/CSV, and get a first-pass analysis — without any store credentials.
+
+- Climbs an **efficiency ladder**: Apple's public RSS JSON (iOS) → `google-play-scraper` (Android, full history) → App Store Connect API (only if you have creds) → browser scraping as a genuine last resort.
+- Ships three runnable scripts (`scrape-ios.mjs`, `scrape-android.mjs`, `combine-and-analyze.mjs`) that take app identifiers via env vars, dedup across country/locale storefronts, and emit a combined CSV.
+- First-pass analysis out of the box: **rating distribution**, **trend by year**, and **complaint-theme buckets** over the negative reviews.
+
+Great for competitive research, ASO, and turning a competitor's top complaints into your own differentiation.
+
 ## Install
 
 In Claude Code:
@@ -32,6 +41,7 @@ In Claude Code:
 /plugin marketplace add daniel-lopez-puig/claude-skills
 /plugin install mobile-web-correctness@claude-skills
 /plugin install browser-modes@claude-skills
+/plugin install app-review-scraper@claude-skills
 ```
 
 That's it — the skills are now available and Claude will pull them in when relevant.

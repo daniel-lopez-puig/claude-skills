@@ -14,6 +14,11 @@
       "name": "browser-modes",
       "source": "./plugins/browser-modes",
       "description": "Pick the right browser-automation mode before any Playwright/web task — headless (default, invisible), a visible window when login/auth is needed, or handover to the user's real already-open Chrome only when asked. Stops agents narrating a headless browser as if the user can see it."
+    },
+    {
+      "name": "app-review-scraper",
+      "source": "./plugins/app-review-scraper",
+      "description": "Download every public review for one or more mobile apps from the iOS App Store and Google Play, store it locally as normalized JSON/CSV, and run a first-pass analysis (rating distribution, trend over time, complaint themes). Uses the fast no-credential paths first (Apple RSS JSON, google-play-scraper) and treats browser scraping as a last resort."
     }
   ]
 }
