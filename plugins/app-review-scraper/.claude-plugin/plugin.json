@@ -1,0 +1,11 @@
+{
+  "name": "app-review-scraper",
+  "version": "0.1.0",
+  "description": "A Claude Code skill: download every public user review for a mobile app (or several apps) from the iOS App Store and Google Play, store it locally as normalized JSON/CSV, and run a first-pass analysis (rating distribution, trend over time, complaint themes). Uses the fast no-credential paths first (Apple's public RSS JSON, google-play-scraper) and only falls back to slow browser scraping as a last resort.",
+  "author": {
+    "name": "Daniel Lopez Puig",
+    "url": "https://github.com/daniel-lopez-puig"
+  },
+  "keywords": ["app-store", "google-play", "reviews", "scraper", "ratings", "competitive-research", "aso", "ios", "android", "skill"],
+  "license": "MIT"
+}
