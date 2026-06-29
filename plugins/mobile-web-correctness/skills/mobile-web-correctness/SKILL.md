@@ -25,6 +25,15 @@ Skip only for purely desktop/internal tooling with no mobile surface.
 ```css
 .myInput { font-size: 16px; } /* never < 16px on mobile */
 ```
+**Enforce it ONCE, globally — not per component.** Fixing inputs one-by-one (or in one app's shared `<Input>`) misses native `<select>`/`<textarea>`, third-party widgets, and *entire other apps* in a monorepo — the bug just resurfaces on the next field someone adds. Add a single mobile-only floor on every focusable control so nothing can slip through:
+```css
+@media (max-width: 639px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']), textarea, select {
+    font-size: max(16px, var(--control-font, 0px)); /* floor, not fixed: large controls opt out via --control-font */
+  }
+}
+```
+`max()` makes it a *floor*, so an intentionally-large field (OTP, title) keeps its size by setting `--control-font`. Put the rule **unlayered** so it beats Tailwind's layered `text-*` utilities. **Beware UI-zoom knobs:** if the app scales itself with CSS `zoom`/`transform` (e.g. a readability `--ui-scale`) and *disables* that scaling on phones, the control's literal font-size is what iOS measures — a `text-sm` (14px) field zooms even though it looked ≥16px on desktop. **Verify by reading `getComputedStyle(el).fontSize` on a real rendered field at a <640px viewport** (headless is fine for this measurement), not by eyeballing.
 
 ### 2. On-screen keyboard → use `visualViewport`, not `100vh`
 **Symptom:** keyboard covers the input, or a docked composer floats behind it. **Rule:** the keyboard shrinks the *visual* viewport but not the *layout* viewport (what `position:fixed` and `100vh` use). For a full-screen overlay with a docked input, pin it to `window.visualViewport` with **top + height (never `bottom`)** and listen to `resize`/`scroll`.
