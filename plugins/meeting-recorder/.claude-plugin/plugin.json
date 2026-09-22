@@ -1,0 +1,11 @@
+{
+  "name": "meeting-recorder",
+  "version": "0.1.0",
+  "description": "A Claude Code skill + three small Linux commands: record any call locally (mic + system audio as separate channels, no bot), transcribe it on-device with whisper.cpp (GPU via Vulkan when available, speaker labels, silence skipping), then let Claude write a summary in the language spoken, propose a CRM entry (Airtable) or a Google Doc in the right Drive folder, and share it read-only with the attendees only after two explicit confirmations. Profiles keep work and personal meetings apart. Audio never leaves the machine.",
+  "author": {
+    "name": "Daniel Lopez Puig",
+    "url": "https://github.com/daniel-lopez-puig"
+  },
+  "keywords": ["meetings", "recording", "transcription", "whisper.cpp", "summaries", "google-drive", "airtable", "crm", "linux", "pipewire", "privacy", "skill"],
+  "license": "MIT"
+}

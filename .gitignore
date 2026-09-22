@@ -1,0 +1,5 @@
+# private per-machine config never belongs here
+config.json
+**/config.json
+*.local.json
+__pycache__/

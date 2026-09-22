@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# record — local, bot-free meeting recorder (mic + system audio) for PipeWire / PulseAudio on Linux.
+#
+#   record [-es|-ca|-en|--lang XX] [-p PROFILE] [title words...]
+#
+# Writes <recordings_dir>/YYYY-MM-DD_HHMM_<slug>.ogg as a stereo Opus file:
+#   left channel  = your microphone (default source)
+#   right channel = what you hear (monitor of the default sink: the other people)
+# The split lets `transcribe` label who said what. Ctrl+C stops and finalises the file.
+# Language and profile are stored inside the file as Opus tags, so nothing has to be repeated later.
+#
+# Plain bash, no daemons, nothing leaves this machine.
+
+set -u
+
+HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+MRCONFIG="$HERE/mrconfig"
+cfg() { [ -x "$MRCONFIG" ] && "$MRCONFIG" "$@" 2>/dev/null || true; }
+
+REC_DIR="${RECORDINGS_DIR:-$(cfg get recordings_dir "$HOME/Recordings")}"
+REC_DIR="${REC_DIR/#\~/$HOME}"
+PROFILE="${MEETING_PROFILE:-$(cfg get default_profile "")}"
+LANG_TAG=""
+TITLE=""
+
+usage() {
+  cat <<'EOF'
+record — record a meeting locally (your mic + what you hear), stereo Opus, tiny files.
+
+USAGE
+  record [-ca|-es|-en|--lang XX] [-p PROFILE] [title words...]
+
+  Flags come BEFORE the title. The title needs no quotes.
+
+    -ca / -es / -en    spoken language (default: the profile's language, else en)
+    --lang XX          any whisper language code
+    -p, --profile P    context profile from the config (default: default_profile),
+                       e.g. work vs personal — decides where the summary goes later
+    -h, --help         this help
+
+EXAMPLES
+  record                              -> 2026-09-22_1130_meeting.ogg          (default language)
+  record Demo with Acme Corp          -> 2026-09-22_1130_demo-with-acme-corp.ogg
+  record -es Reunión con Carla        -> Spanish
+  record -p personal Coffee with Ana  -> personal profile: no CRM, personal Drive folder
+
+HOW IT WORKS
+  * Output goes to recordings_dir from the config (override: RECORDINGS_DIR).
+  * Left channel = your microphone, right channel = the other side (system audio).
+    Both devices are the CURRENT defaults when you start; they are printed so you can check.
+    Pick the right output/mic in the sound settings BEFORE starting (e.g. your earbuds).
+  * Opus 32 kbps, ~14 MB per hour. CPU use is negligible.
+  * Press Ctrl+C to stop. The file is finalised cleanly and its duration is printed.
+    If you accidentally backgrounded it, it prints the exact `kill -INT <pid>` that stops it.
+  * Language and profile are saved inside the file; `transcribe` and the skill read them.
+  * Nothing is uploaded anywhere. Keep the recordings folder outside every git repo.
+
+NEXT STEPS
+  transcribe <file>.ogg                   local transcription (whisper.cpp)
+  In Claude Code: "process my recordings" transcribe + summarise + propose CRM/Drive
+EOF
+}
+
+die() { printf 'record: %s\n' "$*" >&2; exit 1; }
+
+# ---------- arguments: leading flags, then the title ----------
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help)    usage; exit 0 ;;
+    -es|-ca|-en|-fr|-it|-pt|-de) LANG_TAG="${1#-}"; shift ;;
+    --lang)       [ $# -ge 2 ] || die "--lang needs a value"; LANG_TAG="$2"; shift 2 ;;
+    --lang=*)     LANG_TAG="${1#--lang=}"; shift ;;
+    -p|--profile) [ $# -ge 2 ] || die "--profile needs a value"; PROFILE="$2"; shift 2 ;;
+    --profile=*)  PROFILE="${1#--profile=}"; shift ;;
+    --)           shift; break ;;
+    -*)           die "unknown flag '$1' (try: record --help)" ;;
+    *)            break ;;
+  esac
+done
+TITLE="$*"
+[ -n "$LANG_TAG" ] || LANG_TAG=$(cfg profile "${PROFILE:--}" language "en")
+[ -n "$LANG_TAG" ] || LANG_TAG=en
+
+# ---------- dependencies ----------
+command -v ffmpeg  >/dev/null || die "ffmpeg not found  (sudo apt install ffmpeg)"
+command -v ffprobe >/dev/null || die "ffprobe not found (sudo apt install ffmpeg)"
+command -v setsid  >/dev/null || die "setsid not found (util-linux)"
+if   command -v wpctl >/dev/null; then DEV_TOOL=wpctl
+elif command -v pactl >/dev/null; then DEV_TOOL=pactl
+else die "neither wpctl nor pactl found (sudo apt install pipewire-bin or pulseaudio-utils)"; fi
+
+# ---------- resolve the default devices NOW ----------
+node_name() { sed -n 's/.*node\.name = "\(.*\)"/\1/p' | head -1; }
+node_desc() { sed -n 's/.*node\.description = "\(.*\)"/\1/p' | head -1; }
+if [ "$DEV_TOOL" = wpctl ]; then
+  SRC_INFO=$(wpctl inspect @DEFAULT_AUDIO_SOURCE@ 2>/dev/null) || die "no default audio source (is PipeWire running?)"
+  SINK_INFO=$(wpctl inspect @DEFAULT_AUDIO_SINK@ 2>/dev/null)  || die "no default audio sink (is PipeWire running?)"
+  MIC=$(printf '%s' "$SRC_INFO" | node_name);   MIC_DESC=$(printf '%s' "$SRC_INFO" | node_desc)
+  SINK=$(printf '%s' "$SINK_INFO" | node_name); SINK_DESC=$(printf '%s' "$SINK_INFO" | node_desc)
+else
+  MIC=$(pactl get-default-source);  MIC_DESC="$MIC"
+  SINK=$(pactl get-default-sink);   SINK_DESC="$SINK"
+fi
+[ -n "$MIC" ]  || die "could not resolve the default microphone"
+[ -n "$SINK" ] || die "could not resolve the default output"
+SPK="$SINK.monitor"
+
+# ---------- output path ----------
+mkdir -p "$REC_DIR" || die "cannot create $REC_DIR"
+SLUG=$(printf '%s' "$TITLE" | iconv -f utf8 -t ascii//TRANSLIT 2>/dev/null \
+      | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+[ -n "$SLUG" ] || SLUG="meeting"
+STAMP=$(date +%Y-%m-%d_%H%M)
+OUT="$REC_DIR/${STAMP}_${SLUG}.ogg"
+n=2; while [ -e "$OUT" ]; do OUT="$REC_DIR/${STAMP}_${SLUG}-$n.ogg"; n=$((n+1)); done
+LOCK="$REC_DIR/.recording"
+
+# ---------- banner ----------
+printf 'Recording  -> %s\n' "$OUT"
+printf 'Language   -> %s   Profile -> %s\n' "$LANG_TAG" "${PROFILE:-(none)}"
+printf 'Mic  (L)   -> %s  [%s]\n' "$MIC_DESC" "$MIC"
+printf 'Other (R)  -> %s  [%s]\n' "$SINK_DESC" "$SPK"
+case "$MIC" in *.monitor*) printf 'WARNING: the default source is a monitor, not a microphone.\n' >&2 ;; esac
+case "$SINK" in *HDMI*|*hdmi*) printf 'WARNING: the default output is an HDMI port; the right channel may be silent.\n' >&2 ;; esac
+if ps -o stat= -p $$ 2>/dev/null | grep -q '+'; then
+  printf 'Ctrl+C to stop.\n\n'
+else
+  printf 'NOTE: running in the background (did you type & in the title?). Stop it with:  kill -INT %s\n\n' "$$"
+fi
+
+# ---------- run ----------
+START=$(date +%s)
+printf '%s\n' "$OUT" > "$LOCK"
+cleanup() { rm -f "$LOCK"; }
+trap cleanup EXIT
+command -v notify-send >/dev/null && notify-send -a record "Recording started" "$(basename "$OUT")" 2>/dev/null
+
+# ffmpeg runs in its own session (setsid), so a terminal Ctrl+C never reaches it directly: this
+# script is the single recipient and forwards exactly ONE SIGINT (two in a row make ffmpeg abort
+# without writing the trailer). ffmpeg finalises the file and exits; the script waits and reports.
+setsid ffmpeg -hide_banner -loglevel error -nostdin \
+  -f pulse -i "$MIC" \
+  -f pulse -i "$SPK" \
+  -filter_complex "[0:a]aformat=channel_layouts=mono[m];[1:a]aformat=channel_layouts=mono[s];[m][s]amerge=inputs=2[a]" \
+  -map "[a]" -ar 16000 -c:a libopus -b:a 32k -application voip \
+  -metadata language="$LANG_TAG" -metadata title="${TITLE:-meeting}" -metadata comment="L=mic R=system" \
+  -metadata profile="${PROFILE:-}" \
+  "$OUT" &
+FFPID=$!
+stop_ffmpeg() { trap ':' INT TERM; kill -INT "$FFPID" 2>/dev/null; }
+trap stop_ffmpeg INT TERM
+wait "$FFPID"; RC=$?
+while kill -0 "$FFPID" 2>/dev/null; do wait "$FFPID"; RC=$?; done
+trap - INT TERM
+# 0 = ended normally, 255 = stopped by SIGINT (ffmpeg's convention): both are success.
+if [ "$RC" -ne 0 ] && [ "$RC" -ne 255 ]; then
+  printf '\nrecord: ffmpeg exited with code %s\n' "$RC" >&2
+  [ -s "$OUT" ] || { rm -f "$OUT"; exit "$RC"; }
+fi
+
+# ---------- summary ----------
+DUR=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT" 2>/dev/null | cut -d. -f1)
+SIZE=$(du -h "$OUT" 2>/dev/null | cut -f1)
+[ -n "${DUR:-}" ] || DUR=$(( $(date +%s) - START ))
+printf '\nSaved      -> %s\n' "$OUT"
+printf 'Duration   -> %02d:%02d:%02d   Size -> %s\n' $((DUR/3600)) $((DUR%3600/60)) $((DUR%60)) "$SIZE"
+command -v notify-send >/dev/null && notify-send -a record "Recording saved" "$(basename "$OUT") ($SIZE)" 2>/dev/null
+exit 0
