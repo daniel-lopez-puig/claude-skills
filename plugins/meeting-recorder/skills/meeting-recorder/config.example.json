@@ -1,0 +1,48 @@
+{
+  "_comment": "Copy to ~/.config/meeting-recorder/config.json and fill in. This file is private: it is read by the scripts and by the skill, never committed. Tokens are NOT here (Drive auth lives in rclone).",
+
+  "recordings_dir": "~/Recordings",
+  "default_profile": "work",
+
+  "speaker_labels": { "me": "Me", "others": "Others" },
+
+  "profiles": {
+    "work": {
+      "identity": "Your Name, founder of Company — meetings with customers, advisors, partners",
+      "language": "en",
+      "summary_language": "recording",
+      "internal_notes_language": "en",
+      "mail_account": "you@company.com",
+      "drive": {
+        "remote": "gdrive-company",
+        "meetings_folder": "Company/Meetings",
+        "customers_folder": "Company/Customers/{customer}/Meetings"
+      },
+      "doc_title": "Meeting {date} {names} – {company} – {goal}",
+      "share_message": {
+        "ca": "Et comparteixo el resum de la nostra reunió. Qualsevol correcció o matís, digue-m'ho. Gràcies.",
+        "es": "Te comparto el resumen de nuestra reunión. Cualquier corrección o matiz, dímelo. Gracias.",
+        "en": "Sharing the summary of our meeting. Any correction or nuance, let me know. Thanks."
+      },
+      "crm": {
+        "kind": "airtable",
+        "base": "appXXXXXXXXXXXXXX",
+        "accounts_table": "tblXXXXXXXXXXXXXX",
+        "interactions_table": "tblXXXXXXXXXXXXXX",
+        "tasks_table": "tblXXXXXXXXXXXXXX",
+        "rules": "One free-text paragraph with your CRM conventions, e.g. which field holds the follow-up owner, which fields are rollups and must never be written, how to classify interaction types."
+      }
+    },
+    "personal": {
+      "identity": "Your Name — personal meetings, not related to Company",
+      "language": "en",
+      "summary_language": "recording",
+      "drive": {
+        "remote": "gdrive-personal",
+        "meetings_folder": "Meetings"
+      },
+      "doc_title": "Meeting {date} {names} – {goal}",
+      "crm": null
+    }
+  }
+}
