@@ -33,6 +33,16 @@ Download **every public review** for one or more mobile apps from the **iOS App 
 
 Great for competitive research, ASO, and turning a competitor's top complaints into your own differentiation.
 
+### `meeting-recorder`
+A **local, bot-free meeting recorder** for Linux plus the skill that turns recordings into meeting notes:
+
+- `record [-es|-ca] [-p profile] title` captures your mic (left channel) and what you hear (right channel) from PipeWire/PulseAudio into a tiny Opus file. Works with any call app; nobody is notified, no bot joins.
+- `transcribe` runs **whisper.cpp on-device** (Vulkan GPU build with CPU fallback, `large-v3-turbo`), labels who said what from the stereo split, skips silence (silero VAD). ~15–20 min per meeting hour on an integrated GPU.
+- The skill ("process my recordings") transcribes what is pending, writes a summary **in the language spoken**, finds the calendar event (Gmail invitations or a Calendar connector), then **asks** before creating either a CRM entry (Airtable) or a Google Doc in the right Drive folder, and again before sharing it read-only with the attendees. Work vs personal **profiles** decide where things go.
+- Audio and transcripts never leave the machine. Drive access borrows your `rclone` token; no other credential is stored.
+
+Linux only (PipeWire or PulseAudio). `scripts/install.sh` installs everything; `config.example.json` shows the private config.
+
 ## Install
 
 In Claude Code:
@@ -42,13 +52,14 @@ In Claude Code:
 /plugin install mobile-web-correctness@claude-skills
 /plugin install browser-modes@claude-skills
 /plugin install app-review-scraper@claude-skills
+/plugin install meeting-recorder@claude-skills
 ```
 
 That's it — the skills are now available and Claude will pull them in when relevant.
 
 ## Contributing
 
-PRs very welcome — especially **new entries** for recurring mobile bugs you've hit. See [CONTRIBUTING.md](./CONTRIBUTING.md). The whole point is for the checklist to get better as more people add the traps they've stepped on.
+PRs very welcome — new skills, and especially **new entries** for recurring mobile bugs you've hit in `mobile-web-correctness`. See [CONTRIBUTING.md](./CONTRIBUTING.md). The whole point is for the checklist to get better as more people add the traps they've stepped on.
 
 ## License
 
