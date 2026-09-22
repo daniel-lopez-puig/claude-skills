@@ -19,6 +19,11 @@
       "name": "app-review-scraper",
       "source": "./plugins/app-review-scraper",
       "description": "Download every public review for one or more mobile apps from the iOS App Store and Google Play, store it locally as normalized JSON/CSV, and run a first-pass analysis (rating distribution, trend over time, complaint themes). Uses the fast no-credential paths first (Apple RSS JSON, google-play-scraper) and treats browser scraping as a last resort."
+    },
+    {
+      "name": "meeting-recorder",
+      "source": "./plugins/meeting-recorder",
+      "description": "Record any call locally on Linux (mic + system audio as separate channels, no bot), transcribe on-device with whisper.cpp (Vulkan GPU when available, speaker labels, silence skipping), then let Claude summarise in the language spoken, propose a CRM entry or a Google Doc in the right Drive folder, and share it read-only with attendees only after two explicit confirmations. Work/personal profiles. Audio never leaves the machine."
     }
   ]
 }

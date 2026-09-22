@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# transcribe — local transcription with whisper.cpp. Nothing leaves this machine.
+#
+#   transcribe <audio-file> [--lang XX|auto] [--model <ggml.bin>] [--threads N]
+#
+# Writes <same-basename>.txt next to the audio, with timestamps. Stereo recordings made by `record`
+# (L = you, R = the other side) are diarized: each line is labelled with the speaker labels from the
+# config (default [Me] / [Others]). Language priority: --lang > tag stored by `record` > profile > en.
+
+set -u
+
+HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+MRCONFIG="$HERE/mrconfig"
+cfg() { [ -x "$MRCONFIG" ] && "$MRCONFIG" "$@" 2>/dev/null || true; }
+
+WHISPER_DIR="${WHISPER_DIR:-$HOME/.local/share/whisper.cpp}"
+MODEL="${WHISPER_MODEL:-$WHISPER_DIR/models/ggml-large-v3-turbo.bin}"
+VAD_MODEL="${WHISPER_VAD_MODEL:-$WHISPER_DIR/models/ggml-silero-v5.1.2.bin}"
+THREADS="${WHISPER_THREADS:-8}"
+ME_LABEL=$(cfg get speaker_labels.me "Me");      [ -n "$ME_LABEL" ] || ME_LABEL="Me"
+OTHERS_LABEL=$(cfg get speaker_labels.others "Others"); [ -n "$OTHERS_LABEL" ] || OTHERS_LABEL="Others"
+LANG_OPT=""
+FILE=""
+
+usage() {
+  cat <<EOF
+transcribe — local transcription (whisper.cpp large-v3-turbo), timestamps + speaker labels.
+
+USAGE
+  transcribe <audio-file> [--lang XX|auto] [--model <ggml.bin>] [--threads N]
+
+  --lang     spoken language. Default: the tag \`record\` stored in the file, else the profile's
+             language, else en. \`auto\` detects from the first 30 s only — poor for mixed meetings.
+  --model    path to another ggml model (default: large-v3-turbo)
+  --threads  CPU threads (default 8; the GPU does the heavy part when the Vulkan build is used)
+  -h, --help this help
+
+OUTPUT
+  <same-basename>.txt next to the audio. Lines look like
+    [00:01:02.000 --> 00:01:05.400] [$ME_LABEL] ...
+    [00:01:05.400 --> 00:01:09.100] [$OTHERS_LABEL] ...
+  [$ME_LABEL] = louder on the LEFT channel (your mic), [$OTHERS_LABEL] = louder on the RIGHT
+  (system audio), [?] = undecided. Mono files (phone memos, mp3) get no labels.
+
+NOTES
+  * Any format ffmpeg reads is accepted (ogg, m4a, mp3, wav, mp4...).
+  * A temporary 16 kHz WAV is created and deleted afterwards.
+  * Silence is skipped (silero VAD), so a recording left running after the call stays clean.
+  * Speed: ~15–20 min per meeting hour on an integrated GPU (Vulkan build), about real time on CPU.
+    Heavy on RAM: don't run alongside other memory-hungry jobs.
+EOF
+}
+
+die() { printf 'transcribe: %s\n' "$*" >&2; exit 1; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --lang)    [ $# -ge 2 ] || die "--lang needs a value"; LANG_OPT="$2"; shift 2 ;;
+    --lang=*)  LANG_OPT="${1#--lang=}"; shift ;;
+    --model)   [ $# -ge 2 ] || die "--model needs a value"; MODEL="$2"; shift 2 ;;
+    --threads) [ $# -ge 2 ] || die "--threads needs a value"; THREADS="$2"; shift 2 ;;
+    -*)        die "unknown flag '$1' (try: transcribe --help)" ;;
+    *)         [ -z "$FILE" ] || die "one file at a time"; FILE="$1"; shift ;;
+  esac
+done
+[ -n "$FILE" ] || { usage; exit 1; }
+[ -f "$FILE" ] || die "no such file: $FILE"
+
+command -v ffmpeg  >/dev/null || die "ffmpeg not found"
+command -v ffprobe >/dev/null || die "ffprobe not found"
+WHISPER_BIN=$(command -v whisper-cli) || die "whisper-cli not found (run the skill's install.sh)"
+[ -f "$MODEL" ] || die "model not found: $MODEL (run install.sh, or set WHISPER_MODEL)"
+
+# ---------- language: flag > tag > profile > en ----------
+tag() { ffprobe -v error -show_entries "stream_tags=$1:format_tags=$1" -of default=nw=1:nk=1 "$FILE" 2>/dev/null | head -1; }
+TAG_LANG=$(tag language); TAG_PROFILE=$(tag profile); TITLE=$(tag title)
+PROFILE_LANG=$(cfg profile "${TAG_PROFILE:--}" language "")
+LANG_USED="${LANG_OPT:-${TAG_LANG:-${PROFILE_LANG:-en}}}"
+CHANNELS=$(ffprobe -v error -select_streams a:0 -show_entries stream=channels -of default=nw=1:nk=1 "$FILE" 2>/dev/null)
+DURATION=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$FILE" 2>/dev/null | cut -d. -f1)
+
+OUT="${FILE%.*}.txt"
+TMPD=$(mktemp -d "${TMPDIR:-/tmp}/transcribe.XXXXXX") || die "cannot create temp dir"
+trap 'rm -rf "$TMPD"' EXIT
+WAV="$TMPD/audio.wav"
+
+if [ "${CHANNELS:-1}" -ge 2 ]; then AC=2; DIARIZE="-di"; else AC=1; DIARIZE=""; fi
+VAD=""; [ -f "$VAD_MODEL" ] && VAD="--vad --vad-model $VAD_MODEL"
+printf 'transcribe -> %s\n' "$OUT"
+printf 'language   -> %s%s   channels -> %s%s   threads -> %s%s\n' "$LANG_USED" \
+  "$([ -z "$LANG_OPT" ] && [ -n "$TAG_LANG" ] && printf ' (from file tag)')" "$AC" \
+  "$([ -n "$DIARIZE" ] && printf ' (diarized)')" "$THREADS" "$([ -n "$VAD" ] && printf '   vad -> on')"
+
+ffmpeg -hide_banner -loglevel error -y -nostdin -i "$FILE" -vn -ar 16000 -ac "$AC" -c:a pcm_s16le "$WAV" \
+  || die "ffmpeg could not convert $FILE"
+
+START=$(date +%s)
+# stdout = timestamped segments (with "(speaker N)" when diarized); stderr = progress only.
+"$WHISPER_BIN" -m "$MODEL" -f "$WAV" -l "$LANG_USED" $DIARIZE $VAD -t "$THREADS" -np -pp > "$TMPD/raw.txt" \
+  2> >(grep -vE '^(ggml_vulkan:|read_audio_data:|whisper_print_progress_callback: progress = [0-9]?[0-9]%)' >&2 || true) \
+  || die "whisper-cli failed"
+ELAPSED=$(( $(date +%s) - START ))
+
+{
+  printf '# title: %s\n'    "${TITLE:-$(basename "${FILE%.*}")}"
+  printf '# source: %s\n'   "$(basename "$FILE")"
+  printf '# duration: %02d:%02d:%02d\n' $((DURATION/3600)) $((DURATION%3600/60)) $((DURATION%60))
+  printf '# language: %s\n' "$LANG_USED"
+  [ -n "$TAG_PROFILE" ] && printf '# profile: %s\n' "$TAG_PROFILE"
+  printf '# model: %s\n'    "$(basename "$MODEL")"
+  [ -n "$DIARIZE" ] && printf '# speakers: [%s] = left channel (mic), [%s] = right channel (system audio)\n' "$ME_LABEL" "$OTHERS_LABEL"
+  printf '\n'
+  sed -E "s/\]  +/] /; s/\(speaker 0\) ?/[$ME_LABEL] /; s/\(speaker 1\) ?/[$OTHERS_LABEL] /; s/\(speaker \?\) ?/[?] /" "$TMPD/raw.txt" \
+    | sed -E '/^\s*$/d'
+} > "$OUT"
+
+LINES=$(grep -c '^\[' "$OUT" || true)
+if [ "${DURATION:-0}" -gt 0 ]; then RTF=$(awk -v e="$ELAPSED" -v d="$DURATION" 'BEGIN{printf "%.2f", e/d}'); else RTF="?"; fi
+printf 'done       -> %s segments in %02d:%02d (%sx real time)\n' "$LINES" $((ELAPSED/60)) $((ELAPSED%60)) "$RTF"

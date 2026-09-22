@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""mrconfig — read values from the meeting-recorder config (private, lives outside the repo).
+
+Config path: $MEETING_RECORDER_CONFIG, else ~/.config/meeting-recorder/config.json.
+See config.example.json next to SKILL.md for the shape.
+
+    mrconfig path                         -> prints the config path (exit 1 if missing)
+    mrconfig get <dotted.key> [default]   -> top-level value, e.g. `mrconfig get recordings_dir`
+    mrconfig profile <name|-> <key> [default]
+                                          -> value from profiles.<name> (`-` = default_profile),
+                                             e.g. `mrconfig profile - drive.remote`
+    mrconfig profiles                     -> list profile names, default first
+    mrconfig dump [<name|->]              -> JSON of the whole config or one merged profile
+
+Values that are objects/lists print as JSON; scalars print bare; missing -> default or "".
+Never prints secrets: the config holds ids and folder names, tokens live in rclone.
+"""
+import sys, os, json
+
+def path():
+    return os.path.expanduser(os.environ.get('MEETING_RECORDER_CONFIG') or '~/.config/meeting-recorder/config.json')
+
+def load():
+    p = path()
+    if not os.path.exists(p):
+        return {}
+    with open(p, encoding='utf-8') as f:
+        return json.load(f)
+
+def dig(obj, key):
+    cur = obj
+    for part in key.split('.'):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return None
+    return cur
+
+def out(v, default):
+    if v is None or v == '':
+        print(default)
+    elif isinstance(v, (dict, list)):
+        print(json.dumps(v, ensure_ascii=False))
+    elif isinstance(v, bool):
+        print('true' if v else 'false')
+    else:
+        print(v)
+
+def profile_of(cfg, name):
+    profiles = cfg.get('profiles', {})
+    if name in ('-', '', None):
+        name = cfg.get('default_profile') or (next(iter(profiles)) if profiles else '')
+    return name, profiles.get(name, {})
+
+if __name__ == '__main__':
+    a = sys.argv[1:]
+    cfg = load()
+    if not a or a[0] == 'path':
+        p = path(); print(p); sys.exit(0 if os.path.exists(p) else 1)
+    cmd = a[0]
+    need = {'get': 2, 'profile': 3, 'profiles': 1, 'dump': 1}
+    if cmd not in need or len(a) < need[cmd]:
+        print(__doc__); sys.exit(1)
+    if cmd == 'get':
+        out(dig(cfg, a[1]), a[2] if len(a) > 2 else '')
+    elif cmd == 'profile':
+        _, prof = profile_of(cfg, a[1])
+        out(dig(prof, a[2]), a[3] if len(a) > 3 else '')
+    elif cmd == 'profiles':
+        name, _ = profile_of(cfg, '-')
+        names = list(cfg.get('profiles', {}).keys())
+        print('\n'.join(([name] if name else []) + [n for n in names if n != name]))
+    elif cmd == 'dump':
+        if len(a) > 1:
+            name, prof = profile_of(cfg, a[1]); print(json.dumps({'name': name, **prof}, ensure_ascii=False, indent=1))
+        else:
+            print(json.dumps(cfg, ensure_ascii=False, indent=1))
+    else:
+        print(__doc__); sys.exit(1)
