@@ -26,10 +26,21 @@ doc share. **Two separate yeses, always: one before creating, one before sharing
   ("this one is personal"). The profile fixes: who "I" am in the summary, where the doc goes, whether
   a CRM path exists at all, and the share message. Never mix profiles (a personal meeting never
   touches the work CRM or Drive).
+- **Remote transcription server (optional, `transcribe.remote` in the config).** A machine of the
+  user's own with more power, reached over ssh — for Dani the MSI build server, which he calls
+  **"el MSI", "la MSI", "el servidor", "the build server", "dani-msi"** (LAN `dani-msi.local`,
+  Tailscale `dani-msi`, user `builder`). "Delegate it to the server / pásalo al MSI" = this.
+  `transcribe` uses it on its own when it is reachable **and** whisper finds a GPU there; otherwise
+  it runs here and says why. `--remote` forces the server (its CPU, to keep this machine free),
+  `--local` skips it. Audio goes over as FLAC and is deleted on the server after the run; that is
+  the only place audio leaves this machine. Set up / refresh with `scripts/install-remote.sh`; it
+  prints the one-time admin command if the server's GPU is not usable yet.
 
 Helpers in `scripts/` (run them, do not reimplement):
 - `pending.sh [--all]` — TSV, newest first: file, date, time, title, duration, lang, profile, transcript, summary, state.
-- `transcribe <file>` — writes `X.txt`; language from the file tag; `--lang XX|auto` overrides.
+- `transcribe <file>` — writes `X.txt`; language from the file tag; `--lang XX|auto` overrides;
+  `--local` / `--remote` pick where it runs (default: the GPU server when usable, else here).
+- `install-remote.sh [user@host]` — copies this machine's whisper build + models to the server.
 - `gdoc_create.py --title T --folder P --md X.md [--description D] [--remote R] [--create-folders]` → JSON `{id, link}`.
 - `gdoc_share.py <doc_id> --to a@x.com ... [--lang ca|es|en] [--profile P] [--message M] [--remote R] [--dry-run]`, `--list`.
 - `cleanup.sh [--older-than DAYS] [--also-transcripts] [--apply]` — dry run by default.
@@ -51,6 +62,7 @@ Helpers in `scripts/` (run them, do not reimplement):
   drive_link: <url or none>
   drive_folder: <path>
   crm_record: <id or none>
+  email_draft: <Gmail draft id or none>
   shared: no | YYYY-MM-DD (a@x.com, b@y.com)
   ---
   ```
@@ -61,8 +73,11 @@ Helpers in `scripts/` (run them, do not reimplement):
 1. **List.** `pending.sh`. Show the table. Nothing pending → say so and stop. Default target = **the
    most recent pending recording** (the user usually asks right after hanging up); the others follow.
    If the user names a meeting ("the call with Ana yesterday"), process only that one.
-2. **Transcribe** each file without `.txt`: `transcribe <file>`. Roughly 15–20 min per meeting hour
-   on a GPU build, about real time on CPU: say so before a long one. Then read `X.txt`.
+2. **Transcribe** each file without `.txt`: `transcribe <file>` (background for long ones). Roughly
+   15–20 min per meeting hour on an integrated GPU, a few minutes on a discrete one, about real time
+   on CPU: say which before a long one (the first lines it prints say where it runs). **Check the
+   language early**: the tag is the profile's default, not what was spoken — if the first lines of
+   `X.txt` are in another language, stop it and rerun with `--lang <spoken>`. Then read `X.txt`.
 3. **Classify** (per recording, using its profile):
    - `crm` only if the profile has `crm` **and** the counterpart is an account there (search the
      accounts table by name from the title/transcript) or the content is clearly a sales/customer
@@ -88,8 +103,10 @@ Helpers in `scripts/` (run them, do not reimplement):
    invent attendees, names or dates; quotes stay as spoken.
 6. **Overview + confirmation.** Per recording: profile, classification, three-line summary, and
    exactly what would be written (CRM record fields, or Drive folder + doc title + attendees +
-   calendar reference). Ask "Shall I do it like this?" and **stop**. Nothing external before a yes.
-   "No"/changes → adjust and re-ask. "Local only" → keep just `X.md`.
+   calendar reference, plus the recap-email draft below). Ask "Shall I do it like this?" and
+   **stop**. Nothing external before a yes. If the user's request already asked for exactly this
+   ("prepare the doc and the email draft"), that request is the yes for creating — never for sharing
+   or sending. "No"/changes → adjust and re-ask. "Local only" → keep just `X.md`.
 7. **On yes:**
    - `crm` → follow `crm.rules` from the config; always `get_table_schema` before writing; never
      guess select options; never write rollups. Save the record id in the front-matter. If the user
@@ -101,7 +118,17 @@ Helpers in `scripts/` (run them, do not reimplement):
      the user names another. `drive: null` → local only, say so. `--description "Calendar: <event
      link or title+time> · Recording: <X.ogg>"`: the calendar reference lives only there and in
      `X.md`, never in the doc body. Save `drive_doc`, `drive_link`, `drive_folder`. **Do not share here.**
-8. Report what was written with the links, and "review it; when you want, say 'share it'".
+   - **Recap email → Gmail draft, never sent** (default whenever there are external attendees; skip
+     for internal meetings or when the user says no). The Drive doc / CRM note is the full internal
+     summary; the email is the short one for the other side, which the user reviews and sends. In the
+     profile's `mail_account`, as a reply inside the latest thread with them when there is one
+     (`replyToMessageId` = its last message), else a new mail to the attendees. In the meeting's
+     language and **as short as possible**: one warm line, 3–5 bullets of what was agreed, then
+     actions as "who → what (when)", one closing line. Follow the user's email rules (global
+     CLAUDE.md). Nothing internal in it: our pricing thoughts, CRM notes, strategy, anything marked
+     "do not repeat in writing", product claims not true today. Save `email_draft: <draft id>` in
+     the front-matter.
+8. Report what was written with the links (doc, draft), and "review it; when you want, say 'share it'".
 
 ## Flow: "share it" (second step, always separate)
 
