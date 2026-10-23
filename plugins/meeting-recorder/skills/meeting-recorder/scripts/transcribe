@@ -56,7 +56,7 @@ NOTES
   * Any format ffmpeg reads is accepted (ogg, m4a, mp3, wav, mp4...).
   * A temporary 16 kHz WAV is created and deleted afterwards.
   * Silence is skipped (silero VAD), so a recording left running after the call stays clean.
-  * Speed: ~15–20 min per meeting hour on an integrated GPU (Vulkan build), about real time on CPU.
+  * Speed: ~40–45 min per meeting hour on an integrated GPU (Vulkan build), minutes on a discrete one, about real time on CPU.
     Heavy on RAM: don't run alongside other memory-hungry jobs.
 EOF
 }
