@@ -74,8 +74,8 @@ Helpers in `scripts/` (run them, do not reimplement):
    most recent pending recording** (the user usually asks right after hanging up); the others follow.
    If the user names a meeting ("the call with Ana yesterday"), process only that one.
 2. **Transcribe** each file without `.txt`: `transcribe <file>` (background for long ones). Roughly
-   15–20 min per meeting hour on an integrated GPU, a few minutes on a discrete one, about real time
-   on CPU: say which before a long one (the first lines it prints say where it runs). **Check the
+   40–45 min per meeting hour on an integrated GPU (measured 2026-10-23: 1h08 in 46 min), a few
+   minutes on a discrete one, about real time on CPU: say which before a long one (the first lines it prints say where it runs). **Check the
    language early**: the tag is the profile's default, not what was spoken — if the first lines of
    `X.txt` are in another language, stop it and rerun with `--lang <spoken>`. Then read `X.txt`.
 3. **Classify** (per recording, using its profile):
