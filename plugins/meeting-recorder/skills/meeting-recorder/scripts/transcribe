@@ -133,16 +133,25 @@ if [ "$WHERE" != "local" ] && [ -n "$R_HOSTS" ]; then
     RJOB="$R_DIR/jobs/$(date +%Y%m%d-%H%M%S)-$$"
     rssh "mkdir -p '$RJOB'" || RHOST=""
   fi
-  if [ -n "$RHOST" ] && [ "$WHERE" = "auto" ]; then
+  if [ -n "$RHOST" ]; then
     # whisper only says which backend it got after loading the model: probe with 1 s of silence.
+    # It takes Vulkan device 0, often the integrated GPU: pin the first discrete one (uma: 0).
     ffmpeg -hide_banner -loglevel error -y -nostdin -f lavfi -i anullsrc=r=16000:cl=mono -t 1 -c:a pcm_s16le "$TMPD/probe.wav" \
       && scp -q -o BatchMode=yes "$TMPD/probe.wav" "$RHOST:$RJOB/probe.wav" \
-      && GPU_LINE=$(rssh "$R_RUN -f $RJOB/probe.wav -l en 2>&1 | grep -E 'whisper_backend_init_gpu: (using|no GPU)' | head -1")
-    case "${GPU_LINE:-}" in
-      *using*) printf 'remote     -> %s, GPU: %s\n' "$RHOST" "${GPU_LINE##*using }" ;;
-      *)       printf 'remote     -> %s has no usable GPU, running here (--remote forces it)\n' "$RHOST"
-               rssh "rm -rf '$RJOB'" 2>/dev/null; RHOST=""; RJOB="" ;;
-    esac
+      && PROBE=$(rssh "$R_RUN -f $RJOB/probe.wav -l en 2>&1 | grep -E '^ggml_vulkan: [0-9]+ = |whisper_backend_init_gpu: (using|no GPU)'")
+    DGPU=$(printf '%s\n' "${PROBE:-}" | sed -nE 's/^ggml_vulkan: ([0-9]+) = .*\| uma: 0 .*/\1/p' | head -1)
+    if [ -n "$DGPU" ]; then
+      R_RUN="GGML_VK_VISIBLE_DEVICES=$DGPU $R_RUN"
+      printf 'remote     -> %s, GPU: %s\n' "$RHOST" \
+        "$(printf '%s\n' "$PROBE" | sed -nE "s/^ggml_vulkan: $DGPU = ([^|(]*).*/\1/p" | head -1)"
+    elif printf '%s\n' "${PROBE:-}" | grep -q 'whisper_backend_init_gpu: using'; then
+      printf 'remote     -> %s, integrated GPU\n' "$RHOST"
+    elif [ "$WHERE" = "remote" ]; then
+      printf 'remote     -> %s has no usable GPU, using its CPU (--remote)\n' "$RHOST"
+    else
+      printf 'remote     -> %s has no usable GPU, running here (--remote forces it)\n' "$RHOST"
+      rssh "rm -rf '$RJOB'" 2>/dev/null; RHOST=""; RJOB=""
+    fi
   fi
 fi
 
