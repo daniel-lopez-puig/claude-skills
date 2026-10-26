@@ -7,7 +7,12 @@
 # Copies the build as-is (same OS and CPU architecture on both ends — e.g. Ubuntu 26.04 x86_64),
 # plus libvulkan.so.1 when the server lacks it. No sudo needed. For the server's GPU to be used,
 # its user must be able to open the GPU and see a Vulkan driver; that one-time admin step is
-# printed at the end when it is missing.
+# printed at the end when it is missing. Use a dedicated user for this (e.g. `whisper`, no sudo,
+# home 750, only this PC's ssh key) — never one that runs builds or third-party code, which could
+# read the audio or replace the binary. Creating it (run from this PC, asks the server's password):
+#   scp ~/.ssh/id_ed25519.pub admin@host:/tmp/k.pub && ssh -t admin@host 'sudo useradd -m -s /bin/bash \
+#     -G render,video whisper && sudo install -d -m 700 -o whisper -g whisper /home/whisper/.ssh && \
+#     sudo install -m 600 -o whisper -g whisper /tmp/k.pub /home/whisper/.ssh/authorized_keys && rm /tmp/k.pub'
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)

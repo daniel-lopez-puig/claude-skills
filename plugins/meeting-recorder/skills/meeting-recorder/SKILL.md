@@ -29,12 +29,14 @@ doc share. **Two separate yeses, always: one before creating, one before sharing
 - **Remote transcription server (optional, `transcribe.remote` in the config).** A machine of the
   user's own with more power, reached over ssh — e.g. a home build server, which the user may call
   **"the build server", "gpu-box"** (LAN `gpu-box.local`,
-  Tailscale `gpu-box`, user `builder`). "Delegate it to the server" = this.
+  Tailscale `gpu-box`, user `whisper`). "Delegate it to the server" = this.
   `transcribe` uses it on its own when it is reachable **and** whisper finds a GPU there; otherwise
   it runs here and says why. `--remote` forces the server (its CPU, to keep this machine free),
   `--local` skips it. Audio goes over as FLAC and is deleted on the server after the run; that is
-  the only place audio leaves this machine. Set up / refresh with `scripts/install-remote.sh`; it
-  prints the one-time admin command if the server's GPU is not usable yet.
+  the only place audio leaves this machine. **Use a dedicated server user** (no sudo, groups
+  render+video, home 750, only this PC's key): never the user that runs builds/tests (`builder`),
+  whose third-party code could read the audio or swap the binary. Set up / refresh with
+  `scripts/install-remote.sh`; it prints the one-time admin command if the user or GPU is missing.
 
 Helpers in `scripts/` (run them, do not reimplement):
 - `pending.sh [--all]` — TSV, newest first: file, date, time, title, duration, lang, profile, transcript, summary, state.

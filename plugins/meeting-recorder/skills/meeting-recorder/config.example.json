@@ -10,7 +10,7 @@
     "remote": {
       "_comment": "Optional: your own GPU machine reached over ssh. Remove this block to always transcribe here. Set it up with scripts/install-remote.sh.",
       "hosts": "gpu-box.local gpu-box",
-      "user": "builder",
+      "user": "whisper",
       "dir": "whisper",
       "threads": 8
     }
