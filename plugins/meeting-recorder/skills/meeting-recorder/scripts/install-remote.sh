@@ -9,10 +9,13 @@
 # its user must be able to open the GPU and see a Vulkan driver; that one-time admin step is
 # printed at the end when it is missing. Use a dedicated user for this (e.g. `whisper`, no sudo,
 # home 750, only this PC's ssh key) — never one that runs builds or third-party code, which could
-# read the audio or replace the binary. Creating it (run from this PC, asks the server's password):
-#   scp ~/.ssh/id_ed25519.pub admin@host:/tmp/k.pub && ssh -t admin@host 'sudo useradd -m -s /bin/bash \
+# read the audio or replace the binary. Creating it (run from this PC, asks the server's password).
+# The key is staged in the admin's own home, never in /tmp, where another user could swap it first:
+#   scp ~/.ssh/id_ed25519.pub admin@host:whisper-key.pub && ssh -t admin@host 'sudo useradd -m -s /bin/bash \
 #     -G render,video whisper && sudo install -d -m 700 -o whisper -g whisper /home/whisper/.ssh && \
-#     sudo install -m 600 -o whisper -g whisper /tmp/k.pub /home/whisper/.ssh/authorized_keys && rm /tmp/k.pub'
+#     sudo install -m 600 -o whisper -g whisper ~/whisper-key.pub /home/whisper/.ssh/authorized_keys && \
+#     rm ~/whisper-key.pub'
+# Afterwards check that ~whisper/.ssh/authorized_keys holds exactly that one key.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
