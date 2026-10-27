@@ -180,12 +180,25 @@ if [ -n "$RHOST" ]; then
   # FLAC is lossless and about half the size of the WAV; the server needs no ffmpeg.
   ffmpeg -hide_banner -loglevel error -y -nostdin -i "$FILE" -vn -ar 16000 -ac "$AC" -c:a flac "$TMPD/audio.flac" \
     || die "ffmpeg could not convert $FILE"
+  # One heavy job at a time on the server: a transcription holds R_LOCK exclusive, offloaded
+  # builds/tests (another user) hold it shared. CPU-heavy tests plus a GPU transcription overheated
+  # and froze the server on 2026-10-27. Opened read-only: fs.protected_regular blocks O_CREAT on another
+  # user's file in /var/tmp.
+  R_LOCK=$(cfg get transcribe.remote.lock "/var/tmp/heavy-job.lock")
+  [[ "$R_LOCK" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "transcribe.remote.lock: absolute path, letters, digits, . _ - / only"
+  LOCKED="[ -e $R_LOCK ] || (umask 022; : > $R_LOCK); exec 7<$R_LOCK;
+    flock -n -x 7 || { echo 'remote     -> server busy with builds/tests, waiting' >&2; flock -x 7; }"
   if scp -q -o BatchMode=yes "$TMPD/audio.flac" "$RHOST:$RJOB/audio.flac" \
-     && rssh "$R_RUN -f $RJOB/audio.flac -l $LANG_USED $DIARIZE $R_VAD -t $R_THREADS -np -pp" > "$TMPD/raw.txt" \
+     && rssh "$LOCKED; env $R_RUN -f $RJOB/audio.flac -l $LANG_USED $DIARIZE $R_VAD -t $R_THREADS -np -pp" > "$TMPD/raw.txt" \
           2> >(grep -vE "$FILTER" >&2 || true); then
     :
   else
     printf 'remote     -> failed on %s, running here instead\n' "$RHOST" >&2
+    # Keep what the server got through, so a crash late in a long meeting is not a total loss.
+    if [ -s "$TMPD/raw.txt" ]; then
+      cp "$TMPD/raw.txt" "${OUT%.txt}.remote-partial.txt"
+      printf 'remote     -> partial transcript kept in %s\n' "${OUT%.txt}.remote-partial.txt" >&2
+    fi
     WHISPER_BIN=$(command -v whisper-cli) || die "whisper-cli not found (run the skill's install.sh)"
     [ -f "$MODEL" ] || die "model not found: $MODEL"
     START=$(date +%s); run_local

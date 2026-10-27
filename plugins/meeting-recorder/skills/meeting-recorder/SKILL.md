@@ -37,6 +37,11 @@ doc share. **Two separate yeses, always: one before creating, one before sharing
   render+video, home 750, only this PC's key): never the user that runs builds/tests (`builder`),
   whose third-party code could read the audio or swap the binary. Set up / refresh with
   `scripts/install-remote.sh`; it prints the one-time admin command if the user or GPU is missing.
+  **One heavy job at a time on the server:** `transcribe` holds `/var/tmp/heavy-job.lock` exclusive
+  (config `transcribe.remote.lock`) and `offload` builds/tests hold it shared, so each waits for the
+  other ("server busy… waiting" is normal). CPU-heavy tests plus a GPU transcription overheated the
+  GPU server (95 °C) and froze it on 2026-10-27. Never start a second whisper job there by hand. If the
+  server dies mid-run, `transcribe` falls back here and keeps what it got in `X.remote-partial.txt`.
 
 Helpers in `scripts/` (run them, do not reimplement):
 - `pending.sh [--all]` — TSV, newest first: file, date, time, title, duration, lang, profile, transcript, summary, state.
@@ -76,8 +81,10 @@ Helpers in `scripts/` (run them, do not reimplement):
    most recent pending recording** (the user usually asks right after hanging up); the others follow.
    If the user names a meeting ("the call with Ana yesterday"), process only that one.
 2. **Transcribe** each file without `.txt`: `transcribe <file>` (background for long ones). Roughly
-   ~8 min per meeting hour on a discrete GPU (GPU server RTX 2070: 5 min of audio in 39 s), 40–45 min on
-   an integrated one (this PC: 1h08 in 46 min), about real time on CPU: say which before a long one (the first lines it prints say where it runs). **Check the
+   ~6–8 min per meeting hour on a discrete GPU when it runs alone and cool (GPU server RTX 2070: 10 min of
+   real meeting audio in 58 s), 25–45 min on an integrated one (this PC: 54 min in 23–24 min on
+   2026-10-27), about real time on CPU. The GPU server slows to ~1x when it is hot or sharing with builds
+   — the lock above prevents the sharing. Say which before a long one (the first lines it prints say where it runs). **Check the
    language early**: the tag is the profile's default, not what was spoken — if the first lines of
    `X.txt` are in another language, stop it and rerun with `--lang <spoken>`. Then read `X.txt`.
 3. **Classify** (per recording, using its profile):

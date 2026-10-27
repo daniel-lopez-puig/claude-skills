@@ -12,7 +12,8 @@
       "hosts": "gpu-box.local gpu-box",
       "user": "whisper",
       "dir": "whisper",
-      "threads": 8
+      "threads": 8,
+      "lock": "/var/tmp/heavy-job.lock"
     }
   },
 
