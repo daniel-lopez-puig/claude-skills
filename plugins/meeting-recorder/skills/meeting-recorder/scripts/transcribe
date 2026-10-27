@@ -81,8 +81,8 @@ done
 
 command -v ffmpeg  >/dev/null || die "ffmpeg not found"
 command -v ffprobe >/dev/null || die "ffprobe not found"
-WHISPER_BIN=$(command -v whisper-cli) || die "whisper-cli not found (run the skill's install.sh)"
-[ -f "$MODEL" ] || die "model not found: $MODEL (run install.sh, or set WHISPER_MODEL)"
+# whisper-cli and the model are checked only where they run here (below): a machine that always
+# hands off to the server, like the server's own `claude` user, has neither.
 
 # ---------- language: flag > tag > profile > en ----------
 tag() { ffprobe -v error -show_entries "stream_tags=$1:format_tags=$1" -of default=nw=1:nk=1 "$FILE" 2>/dev/null | head -1; }
