@@ -189,9 +189,10 @@ if [ -n "$RHOST" ]; then
   LOCKED="[ -e $R_LOCK ] || (umask 022; : > $R_LOCK); exec 7<$R_LOCK;
     flock -n -x 7 || { echo 'remote     -> server busy with builds/tests, waiting' >&2; flock -x 7; }"
   if scp -q -o BatchMode=yes "$TMPD/audio.flac" "$RHOST:$RJOB/audio.flac" \
-     && rssh "$LOCKED; env $R_RUN -f $RJOB/audio.flac -l $LANG_USED $DIARIZE $R_VAD -t $R_THREADS -np -pp" > "$TMPD/raw.txt" \
+     && rssh "$LOCKED; date +%s > $RJOB/started; env $R_RUN -f $RJOB/audio.flac -l $LANG_USED $DIARIZE $R_VAD -t $R_THREADS -np -pp" > "$TMPD/raw.txt" \
           2> >(grep -vE "$FILTER" >&2 || true); then
-    :
+    # Time the transcription, not the wait for the lock.
+    GOT=$(rssh "cat $RJOB/started" 2>/dev/null); [[ "$GOT" =~ ^[0-9]+$ ]] && [ "$GOT" -gt "$START" ] && START=$GOT
   else
     printf 'remote     -> failed on %s, running here instead\n' "$RHOST" >&2
     # Keep what the server got through, so a crash late in a long meeting is not a total loss.
