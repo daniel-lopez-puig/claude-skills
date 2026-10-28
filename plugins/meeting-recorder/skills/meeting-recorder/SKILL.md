@@ -1,12 +1,12 @@
 ---
 name: meeting-recorder
-description: Process locally recorded meetings (made with the bundled `record` command, or any audio dropped in the recordings folder) — transcribe on-device with whisper.cpp, write a summary per meeting in the language it was spoken in, then propose either a CRM entry (Airtable, when the profile has one and the counterpart is a customer/account) or a Google Doc in the profile's Drive meetings folder, and only after the user's explicit yes write it; a second explicit step shares the doc read-only with the attendees. Triggers — "process my recordings", "procesa las grabaciones", "processa les gravacions", "transcribe today's meetings", "resume la reunión de hoy", "process the call with X"; the share step "share it", "compártelo", "comparteix-ho", "you can share the meeting doc"; the cleanup step "clean up old recordings", "limpia las grabaciones"; and when the user asks which recordings are pending or how to record a meeting.
+description: Process locally recorded meetings (made with the bundled `record` command, or any audio dropped in the recordings folder) — transcribe on-device with whisper.cpp, write a summary per meeting in the language it was spoken in, then propose either a CRM entry (the profile's CRM — Pipedrive for the work profile since 2026-10-15 — when the profile has one and the counterpart is a customer/account) or a Google Doc in the profile's Drive meetings folder, and only after the user's explicit yes write it; a second explicit step shares the doc read-only with the attendees. Triggers — "process my recordings", "procesa las grabaciones", "processa les gravacions", "transcribe today's meetings", "resume la reunión de hoy", "process the call with X"; the share step "share it", "compártelo", "comparteix-ho", "you can share the meeting doc"; the cleanup step "clean up old recordings", "limpia las grabaciones"; and when the user asks which recordings are pending or how to record a meeting.
 ---
 
 # meeting-recorder — record → transcribe → summary → CRM or Drive doc → (later) share
 
 Everything is local until the user says yes. Audio and transcripts never leave the machine. The only
-things that go out are the summary (to Airtable or a Google Doc) and, on a second explicit step, the
+things that go out are the summary (to the CRM or a Google Doc) and, on a second explicit step, the
 doc share. **Two separate yeses, always: one before creating, one before sharing.**
 
 ## Setup and config (read this first)
@@ -19,7 +19,7 @@ doc share. **Two separate yeses, always: one before creating, one before sharing
   (who the user is in this context), `language`, `summary_language` (`recording` = same as spoken),
   `internal_notes_language`, `mail_account`, `drive` (`remote`, `meetings_folder`,
   `customers_folder`, or `null` = local-only), `doc_title` template, `share_message` per language,
-  and `crm` (Airtable base/table ids + a `rules` paragraph, or `null`).
+  and `crm` (`kind` — e.g. `pipedrive` — plus account details and a `rules` paragraph, or `null`).
   Missing config → say so, point at `config.example.json`, and stop.
 - **Profiles decide context.** Each recording carries a `profile` tag written by `record -p NAME`
   (shown by `pending.sh`); no tag = `default_profile`. The user can also override in the prompt
@@ -117,8 +117,9 @@ Helpers in `scripts/` (run them, do not reimplement):
    ("prepare the doc and the email draft"), that request is the yes for creating — never for sharing
    or sending. "No"/changes → adjust and re-ask. "Local only" → keep just `X.md`.
 7. **On yes:**
-   - `crm` → follow `crm.rules` from the config; always `get_table_schema` before writing; never
-     guess select options; never write rollups. Save the record id in the front-matter. If the user
+   - `crm` → follow `crm.rules` from the config; read the CRM's schema first (Pipedrive:
+     `getAccountContext`; Airtable: `get_table_schema`); never guess select options or custom-field
+     keys; never write computed fields. Save the record id in the front-matter. If the user
      also wants a doc for the account: `customers_folder` with `{customer}` filled, `--create-folders`.
    - `meeting` → title from `doc_title`: `{date}` = YYYY-MM-DD, `{names}` = first names of the people
      the user talked with (comma-separated; never the user), `{company}` = their organisation (email
@@ -163,7 +164,7 @@ Helpers in `scripts/` (run them, do not reimplement):
   is not a yes for the next.
 - Recordings, `.txt` and `.md` are never committed, uploaded or synced. No `git init` in the folder.
 - Don't run `transcribe` next to other RAM-heavy jobs.
-- Airtable tool missing → skip the CRM write, say how to attach it, keep `X.md`.
+- CRM connector missing (e.g. Pipedrive) → skip the CRM write, say how to attach it, keep `X.md`.
 - Drive helper failing with 401/403 → the rclone token expired: `rclone lsd <remote>:` refreshes it;
   if rclone itself asks to re-authorise, tell the user. Drive limits: unencrypted `rclone.conf`, OAuth
   remotes only, folders under "My Drive" (no Shared Drives).

@@ -22,6 +22,7 @@ ap.add_argument('--remote', default=None)
 ap.add_argument('--profile', default='-', help='config profile whose share_message to use')
 ap.add_argument('--list', action='store_true')
 ap.add_argument('--dry-run', action='store_true')
+ap.add_argument('--role', default='reader', choices=['reader', 'commenter'])
 a = ap.parse_args()
 if a.remote:
     os.environ['GDRIVE_REMOTE'] = a.remote
@@ -65,8 +66,8 @@ if __name__ == '__main__':
         if e in already:
             print(json.dumps({'email': e, 'status': 'skipped', 'why': 'already has access'})); continue
         if a.dry_run:
-            print(json.dumps({'email': e, 'status': 'would share', 'role': 'reader', 'notify': True, 'message': a.message}, ensure_ascii=False)); continue
+            print(json.dumps({'email': e, 'status': 'would share', 'role': a.role, 'notify': True, 'message': a.message}, ensure_ascii=False)); continue
         r = api('POST', D + a.doc_id + '/permissions?sendNotificationEmail=true&fields=id,role',
-                {'type': 'user', 'role': 'reader', 'emailAddress': e, 'emailMessage': a.message})
+                {'type': 'user', 'role': a.role, 'emailAddress': e, 'emailMessage': a.message})
         print(json.dumps({'email': e, 'status': 'shared', 'role': r['role'], 'permission_id': r['id']}))
     print(json.dumps({'doc': meta['name'], 'link': meta.get('webViewLink')}, ensure_ascii=False))
