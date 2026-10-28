@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# transcribe — local transcription with whisper.cpp. Nothing leaves this machine.
+# transcribe — local transcription with whisper.cpp. Nothing leaves your own machines: by default
+# this one; with `transcribe.remote` configured, your own GPU server over ssh (audio deleted after).
 #
 #   transcribe <audio-file> [--lang XX|auto] [--model <ggml.bin>] [--threads N]
 #
@@ -21,19 +22,28 @@ ME_LABEL=$(cfg get speaker_labels.me "Me");      [ -n "$ME_LABEL" ] || ME_LABEL=
 OTHERS_LABEL=$(cfg get speaker_labels.others "Others"); [ -n "$OTHERS_LABEL" ] || OTHERS_LABEL="Others"
 LANG_OPT=""
 FILE=""
+WHERE="auto"   # auto | local | remote
 
 usage() {
   cat <<EOF
 transcribe — local transcription (whisper.cpp large-v3-turbo), timestamps + speaker labels.
 
 USAGE
-  transcribe <audio-file> [--lang XX|auto] [--model <ggml.bin>] [--threads N]
+  transcribe <audio-file> [--lang XX|auto] [--model <ggml.bin>] [--threads N] [--local|--remote]
 
   --lang     spoken language. Default: the tag \`record\` stored in the file, else the profile's
              language, else en. \`auto\` detects from the first 30 s only — poor for mixed meetings.
   --model    path to another ggml model (default: large-v3-turbo)
   --threads  CPU threads (default 8; the GPU does the heavy part when the Vulkan build is used)
+  --local    never use the remote server, even if configured
+  --remote   use the remote server even when it has no GPU (CPU there, this machine stays free)
   -h, --help this help
+
+REMOTE SERVER (optional, config \`transcribe.remote\`)
+  A machine of your own (e.g. a build server with a discrete GPU) reached over ssh. By default it is
+  used only when it is reachable AND whisper finds a GPU there; otherwise this machine does the job.
+  The audio goes over as a 16 kHz FLAC, the transcript comes back, both are deleted on the server.
+  Set it up with \`install-remote.sh\`.
 
 OUTPUT
   <same-basename>.txt next to the audio. Lines look like
@@ -46,7 +56,7 @@ NOTES
   * Any format ffmpeg reads is accepted (ogg, m4a, mp3, wav, mp4...).
   * A temporary 16 kHz WAV is created and deleted afterwards.
   * Silence is skipped (silero VAD), so a recording left running after the call stays clean.
-  * Speed: ~15–20 min per meeting hour on an integrated GPU (Vulkan build), about real time on CPU.
+  * Speed: ~40–45 min per meeting hour on an integrated GPU (Vulkan build), minutes on a discrete one, about real time on CPU.
     Heavy on RAM: don't run alongside other memory-hungry jobs.
 EOF
 }
@@ -60,6 +70,8 @@ while [ $# -gt 0 ]; do
     --lang=*)  LANG_OPT="${1#--lang=}"; shift ;;
     --model)   [ $# -ge 2 ] || die "--model needs a value"; MODEL="$2"; shift 2 ;;
     --threads) [ $# -ge 2 ] || die "--threads needs a value"; THREADS="$2"; shift 2 ;;
+    --local)   WHERE="local"; shift ;;
+    --remote)  WHERE="remote"; shift ;;
     -*)        die "unknown flag '$1' (try: transcribe --help)" ;;
     *)         [ -z "$FILE" ] || die "one file at a time"; FILE="$1"; shift ;;
   esac
@@ -69,37 +81,132 @@ done
 
 command -v ffmpeg  >/dev/null || die "ffmpeg not found"
 command -v ffprobe >/dev/null || die "ffprobe not found"
-WHISPER_BIN=$(command -v whisper-cli) || die "whisper-cli not found (run the skill's install.sh)"
-[ -f "$MODEL" ] || die "model not found: $MODEL (run install.sh, or set WHISPER_MODEL)"
+# whisper-cli and the model are checked only where they run here (below): a machine that always
+# hands off to the server, like the server's own `claude` user, has neither.
 
 # ---------- language: flag > tag > profile > en ----------
 tag() { ffprobe -v error -show_entries "stream_tags=$1:format_tags=$1" -of default=nw=1:nk=1 "$FILE" 2>/dev/null | head -1; }
 TAG_LANG=$(tag language); TAG_PROFILE=$(tag profile); TITLE=$(tag title)
 PROFILE_LANG=$(cfg profile "${TAG_PROFILE:--}" language "")
 LANG_USED="${LANG_OPT:-${TAG_LANG:-${PROFILE_LANG:-en}}}"
+[[ "$LANG_USED" =~ ^([a-z]{2,3}|auto)$ ]] || die "bad language code: $LANG_USED"
 CHANNELS=$(ffprobe -v error -select_streams a:0 -show_entries stream=channels -of default=nw=1:nk=1 "$FILE" 2>/dev/null)
 DURATION=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$FILE" 2>/dev/null | cut -d. -f1)
 
 OUT="${FILE%.*}.txt"
 TMPD=$(mktemp -d "${TMPDIR:-/tmp}/transcribe.XXXXXX") || die "cannot create temp dir"
-trap 'rm -rf "$TMPD"' EXIT
+RHOST=""; RJOB=""
+cleanup() {
+  [ -n "$RHOST" ] && [ -n "$RJOB" ] && ssh -o BatchMode=yes -o ConnectTimeout=5 "$RHOST" "rm -rf '$RJOB'" 2>/dev/null
+  rm -rf "$TMPD"
+}
+trap cleanup EXIT
 WAV="$TMPD/audio.wav"
 
 if [ "${CHANNELS:-1}" -ge 2 ]; then AC=2; DIARIZE="-di"; else AC=1; DIARIZE=""; fi
 VAD=""; [ -f "$VAD_MODEL" ] && VAD="--vad --vad-model $VAD_MODEL"
-printf 'transcribe -> %s\n' "$OUT"
-printf 'language   -> %s%s   channels -> %s%s   threads -> %s%s\n' "$LANG_USED" \
-  "$([ -z "$LANG_OPT" ] && [ -n "$TAG_LANG" ] && printf ' (from file tag)')" "$AC" \
-  "$([ -n "$DIARIZE" ] && printf ' (diarized)')" "$THREADS" "$([ -n "$VAD" ] && printf '   vad -> on')"
+FILTER='^(ggml_vulkan:|read_audio_data:|whisper_print_progress_callback: progress = [0-9]?[0-9]%)'
 
-ffmpeg -hide_banner -loglevel error -y -nostdin -i "$FILE" -vn -ar 16000 -ac "$AC" -c:a pcm_s16le "$WAV" \
-  || die "ffmpeg could not convert $FILE"
+# ---------- remote server: reachable, set up, and (unless --remote) with a GPU ----------
+# config: transcribe.remote = { hosts: "lan-name tailscale-name", user, dir (relative to its home), threads }
+R_HOSTS=$(cfg get transcribe.remote.hosts "" | tr -d '[],"')
+R_USER=$(cfg get transcribe.remote.user "")
+R_DIR=$(cfg get transcribe.remote.dir "whisper")
+R_THREADS=$(cfg get transcribe.remote.threads "8")
+[[ "$R_THREADS" =~ ^[0-9]+$ ]] || die "transcribe.remote.threads must be a number"
+[[ "$R_DIR" =~ ^[A-Za-z0-9._/-]+$ ]] || die "transcribe.remote.dir: letters, digits, . _ - / only"
+R_MODEL="$R_DIR/models/$(printf %q "$(basename "$MODEL")")"
+R_VAD=""; [ -n "$VAD" ] && R_VAD="--vad --vad-model $R_DIR/models/$(printf %q "$(basename "$VAD_MODEL")")"
+R_RUN="LD_LIBRARY_PATH=$R_DIR/bin nice -n 5 $R_DIR/bin/whisper-cli -m $R_MODEL"
+rssh() { ssh -o BatchMode=yes -o ConnectTimeout=5 "$RHOST" "$@"; }
+
+if [ "$WHERE" != "local" ] && [ -n "$R_HOSTS" ]; then
+  for h in $R_HOSTS; do
+    t="${R_USER:+$R_USER@}$h"
+    if ssh -o BatchMode=yes -o ConnectTimeout=3 "$t" "test -x $R_DIR/bin/whisper-cli && test -f $R_MODEL" 2>/dev/null; then
+      RHOST="$t"; break
+    fi
+  done
+  if [ -z "$RHOST" ]; then
+    printf 'remote     -> not reachable or not set up (%s), running here\n' "$R_HOSTS"
+  else
+    RJOB="$R_DIR/jobs/$(date +%Y%m%d-%H%M%S)-$$"
+    rssh "mkdir -p '$RJOB'" || RHOST=""
+  fi
+  if [ -n "$RHOST" ]; then
+    # whisper only says which backend it got after loading the model: probe with 1 s of silence.
+    # It takes Vulkan device 0, often the integrated GPU: pin the first discrete one (uma: 0).
+    ffmpeg -hide_banner -loglevel error -y -nostdin -f lavfi -i anullsrc=r=16000:cl=mono -t 1 -c:a pcm_s16le "$TMPD/probe.wav" \
+      && scp -q -o BatchMode=yes "$TMPD/probe.wav" "$RHOST:$RJOB/probe.wav" \
+      && PROBE=$(rssh "$R_RUN -f $RJOB/probe.wav -l en 2>&1 | grep -E '^ggml_vulkan: [0-9]+ = |whisper_backend_init_gpu: (using|no GPU)'")
+    DGPU=$(printf '%s\n' "${PROBE:-}" | sed -nE 's/^ggml_vulkan: ([0-9]+) = .*\| uma: 0 .*/\1/p' | head -1)
+    if [ -n "$DGPU" ]; then
+      R_RUN="GGML_VK_VISIBLE_DEVICES=$DGPU $R_RUN"
+      printf 'remote     -> %s, GPU: %s\n' "$RHOST" \
+        "$(printf '%s\n' "$PROBE" | sed -nE "s/^ggml_vulkan: $DGPU = ([^|(]*).*/\1/p" | head -1)"
+    elif printf '%s\n' "${PROBE:-}" | grep -q 'whisper_backend_init_gpu: using'; then
+      printf 'remote     -> %s, integrated GPU\n' "$RHOST"
+    elif [ "$WHERE" = "remote" ]; then
+      printf 'remote     -> %s has no usable GPU, using its CPU (--remote)\n' "$RHOST"
+    else
+      printf 'remote     -> %s has no usable GPU, running here (--remote forces it)\n' "$RHOST"
+      rssh "rm -rf '$RJOB'" 2>/dev/null; RHOST=""; RJOB=""
+    fi
+  fi
+fi
+
+if [ -z "$RHOST" ]; then
+  WHISPER_BIN=$(command -v whisper-cli) || die "whisper-cli not found (run the skill's install.sh)"
+  [ -f "$MODEL" ] || die "model not found: $MODEL (run install.sh, or set WHISPER_MODEL)"
+fi
+
+printf 'transcribe -> %s\n' "$OUT"
+printf 'language   -> %s%s   channels -> %s%s   threads -> %s%s   on -> %s\n' "$LANG_USED" \
+  "$([ -z "$LANG_OPT" ] && [ -n "$TAG_LANG" ] && printf ' (from file tag)')" "$AC" \
+  "$([ -n "$DIARIZE" ] && printf ' (diarized)')" "$([ -n "$RHOST" ] && echo "$R_THREADS" || echo "$THREADS")" \
+  "$([ -n "$VAD" ] && printf '   vad -> on')" "${RHOST:-this machine}"
+
+run_local() {
+  [ -f "$WAV" ] || ffmpeg -hide_banner -loglevel error -y -nostdin -i "$FILE" -vn -ar 16000 -ac "$AC" -c:a pcm_s16le "$WAV" \
+    || die "ffmpeg could not convert $FILE"
+  # stdout = timestamped segments (with "(speaker N)" when diarized); stderr = progress only.
+  "$WHISPER_BIN" -m "$MODEL" -f "$WAV" -l "$LANG_USED" $DIARIZE $VAD -t "$THREADS" -np -pp > "$TMPD/raw.txt" \
+    2> >(grep -vE "$FILTER" >&2 || true) \
+    || die "whisper-cli failed"
+}
 
 START=$(date +%s)
-# stdout = timestamped segments (with "(speaker N)" when diarized); stderr = progress only.
-"$WHISPER_BIN" -m "$MODEL" -f "$WAV" -l "$LANG_USED" $DIARIZE $VAD -t "$THREADS" -np -pp > "$TMPD/raw.txt" \
-  2> >(grep -vE '^(ggml_vulkan:|read_audio_data:|whisper_print_progress_callback: progress = [0-9]?[0-9]%)' >&2 || true) \
-  || die "whisper-cli failed"
+if [ -n "$RHOST" ]; then
+  # FLAC is lossless and about half the size of the WAV; the server needs no ffmpeg.
+  ffmpeg -hide_banner -loglevel error -y -nostdin -i "$FILE" -vn -ar 16000 -ac "$AC" -c:a flac "$TMPD/audio.flac" \
+    || die "ffmpeg could not convert $FILE"
+  # One heavy job at a time on the server: a transcription holds R_LOCK exclusive, offloaded
+  # builds/tests (another user) hold it shared. CPU-heavy tests plus a GPU transcription overheated
+  # and froze the server on 2026-10-27. Opened read-only: fs.protected_regular blocks O_CREAT on another
+  # user's file in /var/tmp.
+  R_LOCK=$(cfg get transcribe.remote.lock "/var/tmp/heavy-job.lock")
+  [[ "$R_LOCK" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "transcribe.remote.lock: absolute path, letters, digits, . _ - / only"
+  LOCKED="[ -e $R_LOCK ] || (umask 022; : > $R_LOCK); exec 7<$R_LOCK;
+    flock -n -x 7 || { echo 'remote     -> server busy with builds/tests, waiting' >&2; flock -x 7; }"
+  if scp -q -o BatchMode=yes "$TMPD/audio.flac" "$RHOST:$RJOB/audio.flac" \
+     && rssh "$LOCKED; date +%s > $RJOB/started; env $R_RUN -f $RJOB/audio.flac -l $LANG_USED $DIARIZE $R_VAD -t $R_THREADS -np -pp" > "$TMPD/raw.txt" \
+          2> >(grep -vE "$FILTER" >&2 || true); then
+    # Time the transcription, not the wait for the lock.
+    GOT=$(rssh "cat $RJOB/started" 2>/dev/null); [[ "$GOT" =~ ^[0-9]+$ ]] && [ "$GOT" -gt "$START" ] && START=$GOT
+  else
+    printf 'remote     -> failed on %s, running here instead\n' "$RHOST" >&2
+    # Keep what the server got through, so a crash late in a long meeting is not a total loss.
+    if [ -s "$TMPD/raw.txt" ]; then
+      cp "$TMPD/raw.txt" "${OUT%.txt}.remote-partial.txt"
+      printf 'remote     -> partial transcript kept in %s\n' "${OUT%.txt}.remote-partial.txt" >&2
+    fi
+    WHISPER_BIN=$(command -v whisper-cli) || die "whisper-cli not found (run the skill's install.sh)"
+    [ -f "$MODEL" ] || die "model not found: $MODEL"
+    START=$(date +%s); run_local
+  fi
+else
+  run_local
+fi
 ELAPSED=$(( $(date +%s) - START ))
 
 {
