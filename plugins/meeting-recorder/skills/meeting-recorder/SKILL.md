@@ -42,6 +42,9 @@ doc share. **Two separate yeses, always: one before creating, one before sharing
   other ("server busy… waiting" is normal). CPU-heavy tests plus a GPU transcription overheated the
   GPU server (95 °C) and froze it on 2026-10-27. Never start a second whisper job there by hand. If the
   server dies mid-run, `transcribe` falls back here and keeps what it got in `X.remote-partial.txt`.
+  The server itself (lock protocol, users, maintenance mode, `the server's status command`, admin steps) is
+  documented in the global private server notes: read it
+  before anything on the server beyond running `transcribe`.
 
 Helpers in `scripts/` (run them, do not reimplement):
 - `pending.sh [--all]` — TSV, newest first: file, date, time, title, duration, lang, profile, transcript, summary, state.
@@ -81,12 +84,22 @@ Helpers in `scripts/` (run them, do not reimplement):
    most recent pending recording** (the user usually asks right after hanging up); the others follow.
    If the user names a meeting ("the call with Ana yesterday"), process only that one.
 2. **Transcribe** each file without `.txt`: `transcribe <file>` (background for long ones). Roughly
-   ~6–8 min per meeting hour on a discrete GPU when it runs alone and cool (GPU server RTX 2070: 10 min of
-   real meeting audio in 58 s), 25–45 min on an integrated one (this PC: 54 min in 23–24 min on
-   2026-10-27), about real time on CPU. The GPU server slows to ~1x when it is hot or sharing with builds
-   — the lock above prevents the sharing. Say which before a long one (the first lines it prints say where it runs). **Check the
+   ~4–6 min per meeting hour on the server's RTX 2070 (NVIDIA driver 580 since 2026-10-28: 10 min of
+   real audio in 35 s, 0.059x idle; an 86-min meeting in 7:49, 0.09x), 25–45 min on an integrated
+   GPU (this PC: 54 min in 23–24 min), about real time on CPU. Say which before a long one (the
+   first lines it prints say where it runs). **Check the
    language early**: the tag is the profile's default, not what was spoken — if the first lines of
    `X.txt` are in another language, stop it and rerun with `--lang <spoken>`. Then read `X.txt`.
+   **Watch it until it ends, not just until it starts.** While it runs, segments stream into
+   `/tmp/transcribe.*/raw.txt`: within the first 5 min confirm that file grows and its timestamps
+   advance, then keep a Monitor armed (re-arm on expiry) that speaks only when a transcript gets no
+   new text for 3 min, or finishes. `transcribe` itself gives up on the server after
+   `transcribe.remote.stall_minutes` (default 5) without new text, keeps the partial output and
+   reruns here. If that happens, tell the user at once (PushNotification) and check the server with
+   `the server's status command`. History: before the NVIDIA driver, the open nouveau driver hung under sustained
+   load (a `<defunct>` `whisper-cli` stuck in `r535_gsp_msgq_wait`, 2026-10-27/28) and froze the box.
+   nouveau is gone now, and the server has a 60 s hardware watchdog (iTCO) + `kernel.panic=10`, so a
+   frozen box reboots by itself.
 3. **Classify** (per recording, using its profile):
    - `crm` only if the profile has `crm` **and** the counterpart is an account there (search the
      accounts table by name from the title/transcript) or the content is clearly a sales/customer
