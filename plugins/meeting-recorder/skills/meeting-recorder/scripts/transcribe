@@ -188,9 +188,43 @@ if [ -n "$RHOST" ]; then
   [[ "$R_LOCK" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "transcribe.remote.lock: absolute path, letters, digits, . _ - / only"
   LOCKED="[ -e $R_LOCK ] || (umask 022; : > $R_LOCK); exec 7<$R_LOCK;
     flock -n -x 7 || { echo 'remote     -> server busy with builds/tests, waiting' >&2; flock -x 7; }"
-  if scp -q -o BatchMode=yes "$TMPD/audio.flac" "$RHOST:$RJOB/audio.flac" \
-     && rssh "$LOCKED; date +%s > $RJOB/started; env $R_RUN -f $RJOB/audio.flac -l $LANG_USED $DIARIZE $R_VAD -t $R_THREADS -np -pp" > "$TMPD/raw.txt" \
-          2> >(grep -vE "$FILTER" >&2 || true); then
+  # Thermal gate, same as offload's: tests that just released the lock can leave the CPU at 95 °C+,
+  # and a laptop's CPU and GPU share one heatsink. Wait up to 5 min for the package to drop below 90 °C.
+  # shellcheck disable=SC2016  # expanded on the server
+  COOL='for i in $(seq 60); do T=0; for z in /sys/class/thermal/thermal_zone*; do
+      [ "$(cat $z/type 2>/dev/null)" = x86_pkg_temp ] && T=$(cat $z/temp); done
+    [ "$T" -lt 90000 ] && break
+    [ $i -eq 1 ] && echo "remote     -> CPU at $((T / 1000)) °C, letting it cool below 90 first" >&2
+    sleep 5; done'
+  STALL_MIN=$(cfg get transcribe.remote.stall_minutes 5); [[ "$STALL_MIN" =~ ^[1-9][0-9]*$ ]] || STALL_MIN=5
+  R_OK=""
+  if scp -q -o BatchMode=yes "$TMPD/audio.flac" "$RHOST:$RJOB/audio.flac"; then
+    rssh "$LOCKED; $COOL; date +%s > $RJOB/started; env $R_RUN -f $RJOB/audio.flac -l $LANG_USED $DIARIZE $R_VAD -t $R_THREADS -np -pp" > "$TMPD/raw.txt" \
+      2> >(grep -vE "$FILTER" >&2 || true) &
+    RPID=$!
+    # Watchdog: a passing GPU probe proves nothing. On 2026-10-28 the run hung in the (since replaced)
+    # nouveau driver a minute after the probe, and ssh never returns from a hung GPU. Once the server
+    # holds the lock and has started, give up on it when no new text arrives for STALL_MIN minutes.
+    STARTED=""; LAST=-1; SINCE=$(date +%s); TICK=0
+    while kill -0 "$RPID" 2>/dev/null; do
+      sleep 5; TICK=$(( TICK + 1 ))
+      if [ -z "$STARTED" ]; then
+        [ $(( TICK % 3 )) -eq 0 ] && rssh "test -e $RJOB/started" 2>/dev/null && { STARTED=1; SINCE=$(date +%s); }
+        continue
+      fi
+      SIZE=$(stat -c %s "$TMPD/raw.txt" 2>/dev/null || echo 0)
+      if [ "$SIZE" != "$LAST" ]; then LAST=$SIZE; SINCE=$(date +%s)
+      elif [ $(( $(date +%s) - SINCE )) -ge $(( STALL_MIN * 60 )) ]; then
+        printf 'remote     -> no new text for %s min on %s: server stalled, running here (check it: the server's status command)\n' "$STALL_MIN" "$RHOST" >&2
+        # Kill this job's whisper on the server too, or it keeps the lock and offloaded tests wait
+        # forever. [w] keeps pkill from matching (and killing) its own ssh shell.
+        rssh "pkill -f '[w]hisper-cli .* -f $RJOB/audio.flac'" 2>/dev/null
+        kill "$RPID" 2>/dev/null; break
+      fi
+    done
+    wait "$RPID" && R_OK=1
+  fi
+  if [ -n "$R_OK" ]; then
     # Time the transcription, not the wait for the lock.
     GOT=$(rssh "cat $RJOB/started" 2>/dev/null); [[ "$GOT" =~ ^[0-9]+$ ]] && [ "$GOT" -gt "$START" ] && START=$GOT
   else

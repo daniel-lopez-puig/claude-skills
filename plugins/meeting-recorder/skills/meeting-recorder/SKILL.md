@@ -1,12 +1,12 @@
 ---
 name: meeting-recorder
-description: Process locally recorded meetings (made with the bundled `record` command, or any audio dropped in the recordings folder) — transcribe on-device with whisper.cpp, write a summary per meeting in the language it was spoken in, then propose either a CRM entry (Airtable, when the profile has one and the counterpart is a customer/account) or a Google Doc in the profile's Drive meetings folder, and only after the user's explicit yes write it; a second explicit step shares the doc read-only with the attendees. Triggers — "process my recordings", "procesa las grabaciones", "processa les gravacions", "transcribe today's meetings", "resume la reunión de hoy", "process the call with X"; the share step "share it", "compártelo", "comparteix-ho", "you can share the meeting doc"; the cleanup step "clean up old recordings", "limpia las grabaciones"; and when the user asks which recordings are pending or how to record a meeting.
+description: Process locally recorded meetings (made with the bundled `record` command, or any audio dropped in the recordings folder) — transcribe on-device with whisper.cpp, write a summary per meeting in the language it was spoken in, then propose either a CRM entry (the profile's CRM — Pipedrive for the work profile since 2026-10-15 — when the profile has one and the counterpart is a customer/account) or a Google Doc in the profile's Drive meetings folder, and only after the user's explicit yes write it; a second explicit step shares the doc read-only with the attendees. Triggers — "process my recordings", "procesa las grabaciones", "processa les gravacions", "transcribe today's meetings", "resume la reunión de hoy", "process the call with X"; the share step "share it", "compártelo", "comparteix-ho", "you can share the meeting doc"; the cleanup step "clean up old recordings", "limpia las grabaciones"; and when the user asks which recordings are pending or how to record a meeting.
 ---
 
 # meeting-recorder — record → transcribe → summary → CRM or Drive doc → (later) share
 
 Everything is local until the user says yes. Audio and transcripts never leave the machine. The only
-things that go out are the summary (to Airtable or a Google Doc) and, on a second explicit step, the
+things that go out are the summary (to the CRM or a Google Doc) and, on a second explicit step, the
 doc share. **Two separate yeses, always: one before creating, one before sharing.**
 
 ## Setup and config (read this first)
@@ -19,7 +19,7 @@ doc share. **Two separate yeses, always: one before creating, one before sharing
   (who the user is in this context), `language`, `summary_language` (`recording` = same as spoken),
   `internal_notes_language`, `mail_account`, `drive` (`remote`, `meetings_folder`,
   `customers_folder`, or `null` = local-only), `doc_title` template, `share_message` per language,
-  and `crm` (Airtable base/table ids + a `rules` paragraph, or `null`).
+  and `crm` (`kind` — e.g. `pipedrive` — plus account details and a `rules` paragraph, or `null`).
   Missing config → say so, point at `config.example.json`, and stop.
 - **Profiles decide context.** Each recording carries a `profile` tag written by `record -p NAME`
   (shown by `pending.sh`); no tag = `default_profile`. The user can also override in the prompt
@@ -42,6 +42,9 @@ doc share. **Two separate yeses, always: one before creating, one before sharing
   other ("server busy… waiting" is normal). CPU-heavy tests plus a GPU transcription overheated the
   GPU server (95 °C) and froze it on 2026-10-27. Never start a second whisper job there by hand. If the
   server dies mid-run, `transcribe` falls back here and keeps what it got in `X.remote-partial.txt`.
+  The server itself (lock protocol, users, maintenance mode, `the server's status command`, admin steps) is
+  documented in the global private server notes: read it
+  before anything on the server beyond running `transcribe`.
 
 Helpers in `scripts/` (run them, do not reimplement):
 - `pending.sh [--all]` — TSV, newest first: file, date, time, title, duration, lang, profile, transcript, summary, state.
@@ -81,12 +84,22 @@ Helpers in `scripts/` (run them, do not reimplement):
    most recent pending recording** (the user usually asks right after hanging up); the others follow.
    If the user names a meeting ("the call with Ana yesterday"), process only that one.
 2. **Transcribe** each file without `.txt`: `transcribe <file>` (background for long ones). Roughly
-   ~6–8 min per meeting hour on a discrete GPU when it runs alone and cool (GPU server RTX 2070: 10 min of
-   real meeting audio in 58 s), 25–45 min on an integrated one (this PC: 54 min in 23–24 min on
-   2026-10-27), about real time on CPU. The GPU server slows to ~1x when it is hot or sharing with builds
-   — the lock above prevents the sharing. Say which before a long one (the first lines it prints say where it runs). **Check the
+   ~4–6 min per meeting hour on the server's RTX 2070 (NVIDIA driver 580 since 2026-10-28: 10 min of
+   real audio in 35 s, 0.059x idle; an 86-min meeting in 7:49, 0.09x), 25–45 min on an integrated
+   GPU (this PC: 54 min in 23–24 min), about real time on CPU. Say which before a long one (the
+   first lines it prints say where it runs). **Check the
    language early**: the tag is the profile's default, not what was spoken — if the first lines of
    `X.txt` are in another language, stop it and rerun with `--lang <spoken>`. Then read `X.txt`.
+   **Watch it until it ends, not just until it starts.** While it runs, segments stream into
+   `/tmp/transcribe.*/raw.txt`: within the first 5 min confirm that file grows and its timestamps
+   advance, then keep a Monitor armed (re-arm on expiry) that speaks only when a transcript gets no
+   new text for 3 min, or finishes. `transcribe` itself gives up on the server after
+   `transcribe.remote.stall_minutes` (default 5) without new text, keeps the partial output and
+   reruns here. If that happens, tell the user at once (PushNotification) and check the server with
+   `the server's status command`. History: before the NVIDIA driver, the open nouveau driver hung under sustained
+   load (a `<defunct>` `whisper-cli` stuck in `r535_gsp_msgq_wait`, 2026-10-27/28) and froze the box.
+   nouveau is gone now, and the server has a 60 s hardware watchdog (iTCO) + `kernel.panic=10`, so a
+   frozen box reboots by itself.
 3. **Classify** (per recording, using its profile):
    - `crm` only if the profile has `crm` **and** the counterpart is an account there (search the
      accounts table by name from the title/transcript) or the content is clearly a sales/customer
@@ -117,8 +130,9 @@ Helpers in `scripts/` (run them, do not reimplement):
    ("prepare the doc and the email draft"), that request is the yes for creating — never for sharing
    or sending. "No"/changes → adjust and re-ask. "Local only" → keep just `X.md`.
 7. **On yes:**
-   - `crm` → follow `crm.rules` from the config; always `get_table_schema` before writing; never
-     guess select options; never write rollups. Save the record id in the front-matter. If the user
+   - `crm` → follow `crm.rules` from the config; read the CRM's schema first (Pipedrive:
+     `getAccountContext`; Airtable: `get_table_schema`); never guess select options or custom-field
+     keys; never write computed fields. Save the record id in the front-matter. If the user
      also wants a doc for the account: `customers_folder` with `{customer}` filled, `--create-folders`.
    - `meeting` → title from `doc_title`: `{date}` = YYYY-MM-DD, `{names}` = first names of the people
      the user talked with (comma-separated; never the user), `{company}` = their organisation (email
@@ -163,7 +177,7 @@ Helpers in `scripts/` (run them, do not reimplement):
   is not a yes for the next.
 - Recordings, `.txt` and `.md` are never committed, uploaded or synced. No `git init` in the folder.
 - Don't run `transcribe` next to other RAM-heavy jobs.
-- Airtable tool missing → skip the CRM write, say how to attach it, keep `X.md`.
+- CRM connector missing (e.g. Pipedrive) → skip the CRM write, say how to attach it, keep `X.md`.
 - Drive helper failing with 401/403 → the rclone token expired: `rclone lsd <remote>:` refreshes it;
   if rclone itself asks to re-authorise, tell the user. Drive limits: unencrypted `rclone.conf`, OAuth
   remotes only, folders under "My Drive" (no Shared Drives).
