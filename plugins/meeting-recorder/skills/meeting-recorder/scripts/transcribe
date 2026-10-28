@@ -188,10 +188,18 @@ if [ -n "$RHOST" ]; then
   [[ "$R_LOCK" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "transcribe.remote.lock: absolute path, letters, digits, . _ - / only"
   LOCKED="[ -e $R_LOCK ] || (umask 022; : > $R_LOCK); exec 7<$R_LOCK;
     flock -n -x 7 || { echo 'remote     -> server busy with builds/tests, waiting' >&2; flock -x 7; }"
+  # Thermal gate, same as offload's: tests that just released the lock can leave the CPU at 95 °C+,
+  # and a laptop's CPU and GPU share one heatsink. Wait up to 5 min for the package to drop below 90 °C.
+  # shellcheck disable=SC2016  # expanded on the server
+  COOL='for i in $(seq 60); do T=0; for z in /sys/class/thermal/thermal_zone*; do
+      [ "$(cat $z/type 2>/dev/null)" = x86_pkg_temp ] && T=$(cat $z/temp); done
+    [ "$T" -lt 90000 ] && break
+    [ $i -eq 1 ] && echo "remote     -> CPU at $((T / 1000)) °C, letting it cool below 90 first" >&2
+    sleep 5; done'
   STALL_MIN=$(cfg get transcribe.remote.stall_minutes 5); [[ "$STALL_MIN" =~ ^[1-9][0-9]*$ ]] || STALL_MIN=5
   R_OK=""
   if scp -q -o BatchMode=yes "$TMPD/audio.flac" "$RHOST:$RJOB/audio.flac"; then
-    rssh "$LOCKED; date +%s > $RJOB/started; env $R_RUN -f $RJOB/audio.flac -l $LANG_USED $DIARIZE $R_VAD -t $R_THREADS -np -pp" > "$TMPD/raw.txt" \
+    rssh "$LOCKED; $COOL; date +%s > $RJOB/started; env $R_RUN -f $RJOB/audio.flac -l $LANG_USED $DIARIZE $R_VAD -t $R_THREADS -np -pp" > "$TMPD/raw.txt" \
       2> >(grep -vE "$FILTER" >&2 || true) &
     RPID=$!
     # Watchdog: a passing GPU probe proves nothing. On 2026-10-28 the run hung in the (since replaced)
