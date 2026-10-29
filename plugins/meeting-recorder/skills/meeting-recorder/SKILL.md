@@ -1,6 +1,6 @@
 ---
 name: meeting-recorder
-description: Process locally recorded meetings (made with the bundled `record` command, or any audio dropped in the recordings folder) — transcribe on-device with whisper.cpp, write a summary per meeting in the language it was spoken in, then propose either a CRM entry (the profile's CRM — Pipedrive for the work profile since 2026-10-15 — when the profile has one and the counterpart is a customer/account) or a Google Doc in the profile's Drive meetings folder, and only after the user's explicit yes write it; a second explicit step shares the doc read-only with the attendees. Triggers — "process my recordings", "procesa las grabaciones", "processa les gravacions", "transcribe today's meetings", "resume la reunión de hoy", "process the call with X"; the share step "share it", "compártelo", "comparteix-ho", "you can share the meeting doc"; the cleanup step "clean up old recordings", "limpia las grabaciones"; and when the user asks which recordings are pending or how to record a meeting.
+description: Process locally recorded meetings (made with the bundled `record` command, or any audio dropped in the recordings folder) — transcribe on-device with whisper.cpp, write a summary per meeting in the language it was spoken in, then propose either a CRM entry (the profile's CRM, e.g. Pipedrive, when the profile has one and the counterpart is a customer/account) or a Google Doc in the profile's Drive meetings folder, and only after the user's explicit yes write it; a second explicit step shares the doc read-only with the attendees. Triggers — "process my recordings", "procesa las grabaciones", "processa les gravacions", "transcribe today's meetings", "resume la reunión de hoy", "process the call with X"; the share step "share it", "compártelo", "comparteix-ho", "you can share the meeting doc"; the cleanup step "clean up old recordings", "limpia las grabaciones"; and when the user asks which recordings are pending or how to record a meeting.
 ---
 
 # meeting-recorder — record → transcribe → summary → CRM or Drive doc → (later) share
@@ -27,9 +27,8 @@ doc share. **Two separate yeses, always: one before creating, one before sharing
   a CRM path exists at all, and the share message. Never mix profiles (a personal meeting never
   touches the work CRM or Drive).
 - **Remote transcription server (optional, `transcribe.remote` in the config).** A machine of the
-  user's own with more power, reached over ssh — e.g. a home build server, which the user may call
-  **"the build server", "gpu-box"** (LAN `gpu-box.local`,
-  Tailscale `gpu-box`, user `whisper`). "Delegate it to the server" = this.
+  user's own with more power (e.g. a build server with a discrete GPU), reached over ssh. Its hosts
+  and user come from the config; "send it to the server" = this.
   `transcribe` uses it on its own when it is reachable **and** whisper finds a GPU there; otherwise
   it runs here and says why. `--remote` forces the server (its CPU, to keep this machine free),
   `--local` skips it. Audio goes over as FLAC and is deleted on the server after the run; that is
@@ -37,14 +36,14 @@ doc share. **Two separate yeses, always: one before creating, one before sharing
   render+video, home 750, only this PC's key): never the user that runs builds/tests (`builder`),
   whose third-party code could read the audio or swap the binary. Set up / refresh with
   `scripts/install-remote.sh`; it prints the one-time admin command if the user or GPU is missing.
-  **One heavy job at a time on the server:** `transcribe` holds `/var/tmp/heavy-job.lock` exclusive
-  (config `transcribe.remote.lock`) and `offload` builds/tests hold it shared, so each waits for the
-  other ("server busy… waiting" is normal). CPU-heavy tests plus a GPU transcription overheated the
-  GPU server (95 °C) and froze it on 2026-10-27. Never start a second whisper job there by hand. If the
-  server dies mid-run, `transcribe` falls back here and keeps what it got in `X.remote-partial.txt`.
-  The server itself (lock protocol, users, maintenance mode, `the server's status command`, admin steps) is
-  documented in the global private server notes: read it
-  before anything on the server beyond running `transcribe`.
+  **One heavy job at a time on the server:** `transcribe` holds the lock file in
+  `transcribe.remote.lock` (default `/var/tmp/heavy-job.lock`) exclusive, and other heavy jobs
+  (builds, tests) should hold it shared, so each waits for the other ("server busy… waiting" is
+  normal). CPU-heavy work next to a GPU transcription can overheat a laptop-class server and freeze
+  it. Never start a second whisper job there by hand. If the server dies mid-run, `transcribe` falls
+  back here and keeps what it got in `X.remote-partial.txt`. If the user has private notes or a
+  skill for their server (lock protocol, admin steps, status command), read them before doing
+  anything there beyond running `transcribe`.
 
 Helpers in `scripts/` (run them, do not reimplement):
 - `pending.sh [--all]` — TSV, newest first: file, date, time, title, duration, lang, profile, transcript, summary, state.
@@ -84,9 +83,9 @@ Helpers in `scripts/` (run them, do not reimplement):
    most recent pending recording** (the user usually asks right after hanging up); the others follow.
    If the user names a meeting ("the call with Ana yesterday"), process only that one.
 2. **Transcribe** each file without `.txt`: `transcribe <file>` (background for long ones). Roughly
-   ~4–6 min per meeting hour on the server's RTX 2070 (NVIDIA driver 580 since 2026-10-28: 10 min of
-   real audio in 35 s, 0.059x idle; an 86-min meeting in 7:49, 0.09x), 25–45 min on an integrated
-   GPU (this PC: 54 min in 23–24 min), about real time on CPU. Say which before a long one (the
+   ~4–6 min per meeting hour on a discrete GPU with its vendor driver (an RTX 2070: 10 min of real
+   audio in 35 s, 0.059x idle; an 86-min meeting in 7:49, 0.09x), 25–45 min on an integrated GPU
+   (54 min in 23–24 min), about real time on CPU. Say which before a long one (the
    first lines it prints say where it runs). **Check the
    language early**: the tag is the profile's default, not what was spoken — if the first lines of
    `X.txt` are in another language, stop it and rerun with `--lang <spoken>`. Then read `X.txt`.
@@ -95,11 +94,10 @@ Helpers in `scripts/` (run them, do not reimplement):
    advance, then keep a Monitor armed (re-arm on expiry) that speaks only when a transcript gets no
    new text for 3 min, or finishes. `transcribe` itself gives up on the server after
    `transcribe.remote.stall_minutes` (default 5) without new text, keeps the partial output and
-   reruns here. If that happens, tell the user at once (PushNotification) and check the server with
-   `the server's status command`. History: before the NVIDIA driver, the open nouveau driver hung under sustained
-   load (a `<defunct>` `whisper-cli` stuck in `r535_gsp_msgq_wait`, 2026-10-27/28) and froze the box.
-   nouveau is gone now, and the server has a 60 s hardware watchdog (iTCO) + `kernel.panic=10`, so a
-   frozen box reboots by itself.
+   reruns here. If that happens, tell the user at once (PushNotification) and check the server. A
+   passing GPU probe proves nothing: the open nouveau driver has been seen to hang under sustained
+   load (a `<defunct>` `whisper-cli` stuck in `r535_gsp_msgq_wait`, immune to `kill -9`) right after
+   a clean probe; only a reboot clears it, and the vendor NVIDIA driver avoids it.
 3. **Classify** (per recording, using its profile):
    - `crm` only if the profile has `crm` **and** the counterpart is an account there (search the
      accounts table by name from the title/transcript) or the content is clearly a sales/customer
@@ -122,7 +120,9 @@ Helpers in `scripts/` (run them, do not reimplement):
    duration (say if the recording ran on after the call) · attendees · context/goal · key points
    (5–10 lines) · decisions · next steps (owner, date if said) · open questions · for `crm` also
    who has the ball. Speaker labels come from the config (`speaker_labels.me` = the user). Do not
-   invent attendees, names or dates; quotes stay as spoken.
+   invent attendees, names or dates; quotes stay as spoken. **This summary is internal: as much
+   detail as the meeting has** (numbers, names, quotes, incidents, weaknesses, opportunities). It is
+   never what the other side reads; that is the recap email in step 7.
 6. **Overview + confirmation.** Per recording: profile, classification, three-line summary, and
    exactly what would be written (CRM record fields, or Drive folder + doc title + attendees +
    calendar reference, plus the recap-email draft below). Ask "Shall I do it like this?" and
@@ -146,14 +146,30 @@ Helpers in `scripts/` (run them, do not reimplement):
      summary; the email is the short one for the other side, which the user reviews and sends. In the
      profile's `mail_account`, as a reply inside the latest thread with them when there is one
      (`replyToMessageId` = its last message), else a new mail to the attendees. In the meeting's
-     language and **as short as possible**: one warm line, 3–5 bullets of what was agreed, then
-     actions as "who → what (when)", one closing line. Follow the user's email rules (global
-     CLAUDE.md). Nothing internal in it: our pricing thoughts, CRM notes, strategy, anything marked
-     "do not repeat in writing", product claims not true today. Save `email_draft: <draft id>` in
-     the front-matter.
-8. Report what was written with the links (doc, draft), and "review it; when you want, say 'share it'".
+     language and **as short as possible**, in this order:
+     1. One warm line.
+     2. **The most important pending thing first.** If a next meeting was agreed, check the user's
+        calendar yourself and propose a concrete free slot (the length they agreed, e.g. a whole
+        morning), plus one fallback, ready to send.
+     3. "The most important from today": 3–5 bullets.
+     4. A bold **Actions** heading, then bold **"I'll do:"** and **"I'm asking you:"**, each with its
+        bullets, in the meeting's language.
+     5. One closing line.
+
+     Write it as `htmlBody` (for the bold) plus the same text as plain `body`. Follow the user's
+     email rules (global CLAUDE.md). Nothing internal in it: our pricing thoughts, CRM notes,
+     strategy, their weaknesses, anything marked "do not repeat in writing", product claims not true
+     today. Save `email_draft: <draft id>` in the front-matter.
+8. Report what was written with the links (doc, draft). The user reviews and sends the draft
+   themselves. When they say it is sent and a meeting was proposed, create the calendar event for
+   the slot the other side confirmed, only on the user's word. For `meeting` docs, add "when you
+   want, say 'share it'".
 
 ## Flow: "share it" (second step, always separate)
+
+**Customers (`kind: crm`) never get the doc:** it is the full internal summary. What they get is
+the recap email draft, sent by the user when they decide. If "share it" refers to a customer
+meeting, say so and offer the draft instead. The steps below are for `meeting` docs only.
 
 1. Find the doc: the `X.md` the user means (latest with `shared: no`, or the one named). Read
    `drive_doc`, `attendees`, `language`, `profile`.

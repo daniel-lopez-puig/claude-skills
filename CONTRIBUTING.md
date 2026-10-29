@@ -1,5 +1,11 @@
 # Contributing
 
+> **This repository is public.** Only generic, reusable content goes here. Never commit anything
+> personal or business-specific: names of people, customers or companies, email addresses, hostnames,
+> IPs, account or record IDs, internal paths, meeting content, or notes about your own setup. Keep
+> those in your private config or private skills, and refer to them generically ("the user's
+> server", "the profile's CRM").
+
 Thanks for helping! This repo is most useful when people add the real mobile traps they've hit.
 
 ## Add a checklist entry (the common case)

@@ -82,7 +82,7 @@ done
 command -v ffmpeg  >/dev/null || die "ffmpeg not found"
 command -v ffprobe >/dev/null || die "ffprobe not found"
 # whisper-cli and the model are checked only where they run here (below): a machine that always
-# hands off to the server, like the server's own `claude` user, has neither.
+# always hands off to the server has neither.
 
 # ---------- language: flag > tag > profile > en ----------
 tag() { ffprobe -v error -show_entries "stream_tags=$1:format_tags=$1" -of default=nw=1:nk=1 "$FILE" 2>/dev/null | head -1; }
@@ -181,8 +181,8 @@ if [ -n "$RHOST" ]; then
   ffmpeg -hide_banner -loglevel error -y -nostdin -i "$FILE" -vn -ar 16000 -ac "$AC" -c:a flac "$TMPD/audio.flac" \
     || die "ffmpeg could not convert $FILE"
   # One heavy job at a time on the server: a transcription holds R_LOCK exclusive, offloaded
-  # builds/tests (another user) hold it shared. CPU-heavy tests plus a GPU transcription overheated
-  # and froze the server on 2026-10-27. Opened read-only: fs.protected_regular blocks O_CREAT on another
+  # builds/tests (another user) hold it shared: CPU-heavy tests next to a GPU transcription can
+  # overheat and freeze the server. Opened read-only: fs.protected_regular blocks O_CREAT on another
   # user's file in /var/tmp.
   R_LOCK=$(cfg get transcribe.remote.lock "/var/tmp/heavy-job.lock")
   [[ "$R_LOCK" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "transcribe.remote.lock: absolute path, letters, digits, . _ - / only"
@@ -202,7 +202,7 @@ if [ -n "$RHOST" ]; then
     rssh "$LOCKED; $COOL; date +%s > $RJOB/started; env $R_RUN -f $RJOB/audio.flac -l $LANG_USED $DIARIZE $R_VAD -t $R_THREADS -np -pp" > "$TMPD/raw.txt" \
       2> >(grep -vE "$FILTER" >&2 || true) &
     RPID=$!
-    # Watchdog: a passing GPU probe proves nothing. On 2026-10-28 the run hung in the (since replaced)
+    # Watchdog: a passing GPU probe proves nothing. A run has been seen to hang in the open
     # nouveau driver a minute after the probe, and ssh never returns from a hung GPU. Once the server
     # holds the lock and has started, give up on it when no new text arrives for STALL_MIN minutes.
     STARTED=""; LAST=-1; SINCE=$(date +%s); TICK=0
@@ -215,7 +215,7 @@ if [ -n "$RHOST" ]; then
       SIZE=$(stat -c %s "$TMPD/raw.txt" 2>/dev/null || echo 0)
       if [ "$SIZE" != "$LAST" ]; then LAST=$SIZE; SINCE=$(date +%s)
       elif [ $(( $(date +%s) - SINCE )) -ge $(( STALL_MIN * 60 )) ]; then
-        printf 'remote     -> no new text for %s min on %s: server stalled, running here (check it: the server's status command)\n' "$STALL_MIN" "$RHOST" >&2
+        printf 'remote     -> no new text for %s min on %s: server stalled, running here (check the server)\n' "$STALL_MIN" "$RHOST" >&2
         # Kill this job's whisper on the server too, or it keeps the lock and offloaded tests wait
         # forever. [w] keeps pkill from matching (and killing) its own ssh shell.
         rssh "pkill -f '[w]hisper-cli .* -f $RJOB/audio.flac'" 2>/dev/null
